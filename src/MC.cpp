@@ -89,8 +89,7 @@ public:
   
   typedef uint Size;
   
-  typedef Size            Index;
-  typedef pair<Index,uint> NewSpin;
+  typedef Size Index;
   
   //
   
@@ -109,13 +108,13 @@ protected:
   MC(Size N_)
     : beta(0),
       N(N_),
-     _newSpinStack(new NewSpin[N_]),
+     _newSpinStack(new Index[N_]),
       index_dist(0, N_-1)
   { }
   
-  vector<bool>                _cluster;
-  const unique_ptr<NewSpin[]> _newSpinStack;
-  NewSpin *_newSpin;
+  vector<bool>              _cluster;
+  const unique_ptr<Index[]> _newSpinStack;
+  Index *_newSpin;
   Size _nFlip;
   
   std::mt19937                          random_engine; // todo seed
@@ -187,28 +186,21 @@ public:
       
       do
       {
-        const Index j   = _newSpin->first;
-        const uint  dir = _newSpin->second--;
-        if ( dir == 0 )
-          --_newSpin;
+        const Index j = *(_newSpin--);
+        const Pos   q = pos(j);
         
-        Index i;
+        FOR(d, dim)
+        for (int dir=-1; dir<=+1; dir+=2)
         {
-          const uint d  = dir/2;
-          const uint dx = 2*(dir%2)-1 + L[d]; // mod L[d] // note the " + L[d]": must be positive for % to work!
-          const uint  x = j/_Lp[d]; // mod L[d]
-          i = j + ( (x+dx)%L[d] - x%L[d] )*_Lp[d];
-        }
-        
-        if ( !_cluster[i] )
-        {
-          //debug_num += _spins[index_dist(random_engine)][0];
-          
-          Float delta_E = Float(2)*beta*(r|_spins[i])*(r|_spins[j]);
-          //FOR(z,1) debug_num += exp(uniform_dist(random_engine));
-          //FOR(z,1) debug_num += Float(2)*beta*(r|_spins[i+1])*(r|_spins[j+1]);
-          if ( uniform_dist(random_engine) > exp(delta_E) )
-            add_spin(i, r);
+          Pos p = q;
+          p[d] = (p[d] + L[d] + dir) % L[d];
+          const Index i = index(p);
+          if ( !_cluster[i] )
+          {
+            const Float delta_E = Float(2)*beta*(r|_spins[i])*(r|_spins[j]);
+            if ( uniform_dist(random_engine) > exp(delta_E) )
+              add_spin(i, r);
+          }
         }
       }
       while ( _newSpin+1 != _newSpinStack.get() );
@@ -231,7 +223,7 @@ protected:
     ++_nFlip;
     _spins[i].flip(r);
     _cluster[i] = true;
-    *(++_newSpin) = NewSpin(i, 2*dim-1);
+    *(++_newSpin) = i;
   }
   
   Spin random_spin()
