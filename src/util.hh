@@ -74,11 +74,21 @@ std::ostream& operator<<(std::ostream &os, const tuple<Ts> &t)
 }
 */
 
+template<typename T>
+std::ostream& operator<<(std::ostream &os, const vector<T> &v)
+{
+  const size_t n = v.size();
+  os << '{';
+  FOR(i, n-1)
+    os << v[i] << ", ";
+  return os << v[n-1] << '}';
+}
+
 template<typename T, size_t n>
 std::ostream& operator<<(std::ostream &os, const array<T,n> &a)
 {
   os << '{';
-  FOR(i,n-1)
+  FOR(i, n-1)
     os << a[i] << ", ";
   return os << a[n-1] << '}';
 }

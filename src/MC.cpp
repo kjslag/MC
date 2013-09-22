@@ -1,6 +1,7 @@
 typedef unsigned uint;
 typedef double Float;
 
+static bool verbose = false;
 double debug_num = 0;
 
 #include "util.hh"
@@ -43,6 +44,8 @@ struct Value
         sum += _bins[k].x;
     return sum;
   }
+  
+  uint64_t count() const { return _count; }
   
 private:
   struct Bin
@@ -88,7 +91,6 @@ public:
   // lattice
   
   typedef uint Size;
-  
   typedef Size Index;
   
   //
@@ -101,13 +103,17 @@ public:
   virtual void randomize_spins() =0;
   virtual void update() =0;
   
-  Float      beta;
-  const Size N; // number of spins
+  Float              beta;
+  const Size         N; // number of spins
+  const vector<uint> Ls;
+  
+  friend std::ostream& operator<<(std::ostream &os, const MC &mc);
   
 protected:
-  MC(Size N_)
+  MC(Size N_, const vector<uint> &Ls_)
     : beta(0),
       N(N_),
+      Ls(Ls_),
      _newSpinStack(new Index[N_]),
       index_dist(0, N_-1)
   { }
@@ -127,7 +133,16 @@ protected:
 MC::~MC() {}
 
 std::ostream& operator<<(std::ostream &os, const MC &mc)
-{ return os << "{}"; } // TODO
+{
+  os << "{\n"
+     << "β -> " << mc.beta << ",\n"
+     << "L -> " << mc.Ls << ",\n"
+     << "moments -> {" << mc._sum1.count() << ", "
+                       << mc._sum1.sum()   << ", "
+                       << mc._sum2.sum()   << ", "
+                       << mc._sum4.sum()   << "}\n";
+  return os << "}\n";
+}
 
 template<uint dim,              // # of spacial dimensions
          uint n>                // # of fields
@@ -234,8 +249,8 @@ protected:
     return s;
   }
   
-  MC_(const array<uint,dim> &L_, const array<uint,dim> &Lp, Size N_)
-    : MC(N_),
+  MC_(const array<uint,dim> &L_, const vector<uint> &Ls_, const array<uint,dim> &Lp, Size N_)
+    : MC(N_, Ls_),
       L(L_),
      _Lp(Lp),
      _spins(new Spin[N_])
@@ -251,12 +266,12 @@ private:
   const unique_ptr<Spin[]> _spins;
 };
 
-MC* MC::make(const vector<uint> &L, uint n_fields)
+MC* MC::make(const vector<uint> &Ls, uint n_fields)
 {
   size_t N  = 1;
   long double Nf = 1;
-  const uint dim = L.size();
-  FOR(d,dim) { N *= L[d]; Nf *= L[d]; }
+  const uint dim = Ls.size();
+  FOR(d,dim) { N *= Ls[d]; Nf *= Ls[d]; }
   
   const size_t Nmax = std::numeric_limits<MC::Size>::max();
   Assert( N <= Nmax && Nf <= Nmax, N );
@@ -265,10 +280,10 @@ MC* MC::make(const vector<uint> &L, uint n_fields)
   #define ELSE_TRY_MC(dim_, n_) \
   else if (dim == dim_ && n_fields == n_) \
   { \
-    array<uint,dim_> L_, Lp; \
+    array<uint,dim_> L, Lp; \
     uint Lp0 = 1; \
-    for (int d=dim-1; d>=0; --d) { L_[d] = L[d]; Lp[d] = Lp0; Lp0 *= L[d]; } \
-    mc = new MC_<dim_,n_>(L_, Lp, N); \
+    for (int d=dim-1; d>=0; --d) { L[d] = Ls[d]; Lp[d] = Lp0; Lp0 *= Ls[d]; } \
+    mc = new MC_<dim_,n_>(L, Ls, Lp, N); \
   }
   
   if (false) {}
@@ -301,29 +316,53 @@ int main(const int argc, char *argv[])
   //signal( SIGABRT, single_handler );
   
   // read program options
-  if (false)
+  namespace po = boost::program_options;
+  
+  po::options_description generic_options("generic options");
+  generic_options.add_options()
+      ("help,h",                               "print help message")
+      ("verbose,v",                            "print verbose output");
+  
+  po::options_description system_options("system options");
+  system_options.add_options()
+      (",L",   po::value<vector<uint>>(),             "lengths")
+      (",n",   po::value<uint>()->default_value(1),   "for an O(n) model")
+      ("beta", po::value<double>()->default_value(0), "thermodynamic beta");
+  
+  po::options_description simulation_options("simulation options");
+  simulation_options.add_options()
+      ("sweeps", po::value<uint64_t>()->default_value(1), "# of MC sweeps");
+  
+  po::options_description cmdline_options;
+  cmdline_options.add(generic_options)
+                 .add(system_options)
+                 .add(simulation_options);
+  
+  po::variables_map vm;
+  store(po::parse_command_line(argc, argv, cmdline_options), vm);
+  notify(vm);
+  
+  verbose = vm.count("verbose"); // todo
+  
+  /// generic options
+  if ( vm.count("help") )
   {
-    namespace po = boost::program_options;
-    
-    po::options_description generic_options("generic options");
-    generic_options.add_options()
-        ("help,h",                                              "print help message")
-        ("verbose,v",                                           "print verbose output");
-    
-    po::options_description cmdline_options;
-    cmdline_options.add(generic_options);
-    
-    po::variables_map vm;
-    store(po::command_line_parser(argc, argv).
-          options(cmdline_options).run(), vm);
-    notify(vm);
+    std::cout << cmdline_options << std::endl;
+    return 0;
   }
   
-  constexpr uint L = 150;
-  MC *mc = MC::make({L,L,L}, 6);
+  if ( !vm.count("L") )
+  {
+    std::cerr << "L is required" << std::endl;
+    return 1;
+  }
+  
+  MC *mc = MC::make(vm["L"].as<vector<uint>>(), vm["n"].as<uint>());
   mc->clear_spins();
-  mc->beta = 1;
-  mc->update();
+  mc->beta = vm["beta"].as<double>();
+  const uint64_t nSweeps = vm["sweeps"]
+  FOR(i, )
+    mc->update();
   delete mc;
   
   std::cout << debug_num << std::endl;
