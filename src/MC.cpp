@@ -1,3 +1,5 @@
+// make && echo > jobs && for L in 64 128; do for beta in 0 0.25 0.5 1 2; do f="results/ising_${L}_${beta}"; echo -e "$f:\n\t./MC --L $L --L $L --beta $beta --sweep 10000 --file $f\n" >> jobs; done; done
+
 typedef unsigned uint;
 typedef double Float;
 
@@ -6,61 +8,69 @@ double debug_num = 0;
 
 #include "util.hh"
 
-struct Value
+class MC
 {
-  Value() : _count(0) {}
+public:
+  // lattice
   
-  void operator<<(double x)
-  {
-    uint k = 0;
-    next_bin:
-    
-    if ( k < _bins.size() )
-    {
-      Bin &bin = _bins[k];
-      
-      bin.x2 += x*x;
-      if ( !full(k) )
-        bin.x = x;
-      else
-      {
-        x += bin.x;
-        ++k;
-        goto next_bin;
-      }
-    }
-    else
-      _bins.push_back(x);
-    
-    ++_count;
-  }
+  typedef uint Size;
+  typedef Size Index;
   
-  double sum() const
-  {
-    double sum = 0;
-    const uint n = _bins.size();
-    FOR(k,n)
-      if ( full(k) )
-        sum += _bins[k].x;
-    return sum;
-  }
+  //
   
-  uint64_t count() const { return _count; }
+  static MC* make(const vector<uint> &L, uint n_fields);
   
-private:
-  struct Bin
-  {
-    Bin(double y) : x(y), x2(y*y) {}
-    
-    double x, x2;
-  };
+  virtual ~MC();
   
-  bool full(uint k) const
-  { return _count & (uint64_t(1) << k); }
+  virtual void clear_spins() =0;
+  virtual void randomize_spins() =0;
+  virtual void update() =0;
   
-  vector<Bin> _bins;
-  uint64_t    _count;
+  Float              beta;
+  const Size         N; // number of spins
+  const vector<uint> L_;
+  const uint         n_;
+  
+  friend std::ostream& operator<<(std::ostream &os, const MC &mc);
+  
+protected:
+  MC(Size N_, const vector<uint> &L_v, uint n__)
+    : beta(0),
+      N(N_),
+      L_(L_v),
+      n_(n__),
+     _newSpinStack(new Index[N_]),
+      index_dist(0, N_-1),
+      _nSweeps(0)
+  { }
+  
+  vector<bool>              _cluster;
+  const unique_ptr<Index[]> _newSpinStack;
+  Index *_newSpin;
+  Size _nFlip;
+  
+  std::mt19937                          random_engine; // todo seed
+  std::uniform_int_distribution<Index>  index_dist;
+  std::uniform_real_distribution<Float> uniform_dist;
+  std::normal_distribution<Float>       normal_dist;
+  
+  uint64_t _nSweeps;
+  vector<double> _sum1, _sum2, _sum4;
 };
+MC::~MC() {}
+
+ostream& operator<<(ostream &os, const MC &mc)
+{
+  os << "{\n"
+     << "\"n\" -> "    << mc.n_ << ",\n"
+     << "\"L\" -> "    << mc.L_ << ",\n"
+     << "\"beta\" -> " << mc.beta << ",\n"
+     << "\"moments\" -> {" << mc._nSweeps << ", "
+                           << mc._sum1    << ", "
+                           << mc._sum2    << ", "
+                           << mc._sum4    << "}\n";
+  return os << "}\n";
+}
 
 template<uint n>
 struct Spin_
@@ -84,65 +94,6 @@ struct Spin_
 private:
   array<Float,n> _s;
 };
-
-class MC
-{
-public:
-  // lattice
-  
-  typedef uint Size;
-  typedef Size Index;
-  
-  //
-  
-  static MC* make(const vector<uint> &L, uint n_fields);
-  
-  virtual ~MC();
-  
-  virtual void clear_spins() =0;
-  virtual void randomize_spins() =0;
-  virtual void update() =0;
-  
-  Float              beta;
-  const Size         N; // number of spins
-  const vector<uint> Ls;
-  
-  friend std::ostream& operator<<(std::ostream &os, const MC &mc);
-  
-protected:
-  MC(Size N_, const vector<uint> &Ls_)
-    : beta(0),
-      N(N_),
-      Ls(Ls_),
-     _newSpinStack(new Index[N_]),
-      index_dist(0, N_-1)
-  { }
-  
-  vector<bool>              _cluster;
-  const unique_ptr<Index[]> _newSpinStack;
-  Index *_newSpin;
-  Size _nFlip;
-  
-  std::mt19937                          random_engine; // todo seed
-  std::uniform_int_distribution<Index>  index_dist;
-  std::uniform_real_distribution<Float> uniform_dist;
-  std::normal_distribution<Float>       normal_dist;
-  
-  Value _sum1, _sum2, _sum4;
-};
-MC::~MC() {}
-
-std::ostream& operator<<(std::ostream &os, const MC &mc)
-{
-  os << "{\n"
-     << "β -> " << mc.beta << ",\n"
-     << "L -> " << mc.Ls << ",\n"
-     << "moments -> {" << mc._sum1.count() << ", "
-                       << mc._sum1.sum()   << ", "
-                       << mc._sum2.sum()   << ", "
-                       << mc._sum4.sum()   << "}\n";
-  return os << "}\n";
-}
 
 template<uint dim,              // # of spacial dimensions
          uint n>                // # of fields
@@ -227,9 +178,10 @@ public:
     double avg2 = 0;
     FOR(k,n) avg2 += avg[k]*avg[k];
     
-    _sum1 << sqrt(avg2);
-    _sum2 << avg2;
-    _sum4 << avg2*avg2;
+    ++_nSweeps;
+    _sum1.push_back( sqrt(avg2) );
+    _sum2.push_back( avg2       );
+    _sum4.push_back( avg2*avg2  );
   }
   
 protected:
@@ -249,8 +201,8 @@ protected:
     return s;
   }
   
-  MC_(const array<uint,dim> &L_, const vector<uint> &Ls_, const array<uint,dim> &Lp, Size N_)
-    : MC(N_, Ls_),
+  MC_(const array<uint,dim> &L_, const vector<uint> &L_v, const array<uint,dim> &Lp, Size N_)
+    : MC(N_, L_v, n),
       L(L_),
      _Lp(Lp),
      _spins(new Spin[N_])
@@ -266,12 +218,12 @@ private:
   const unique_ptr<Spin[]> _spins;
 };
 
-MC* MC::make(const vector<uint> &Ls, uint n_fields)
+MC* MC::make(const vector<uint> &L, uint n_fields)
 {
   size_t N  = 1;
   long double Nf = 1;
-  const uint dim = Ls.size();
-  FOR(d,dim) { N *= Ls[d]; Nf *= Ls[d]; }
+  const uint dim = L.size();
+  FOR(d,dim) { N *= L[d]; Nf *= L[d]; }
   
   const size_t Nmax = std::numeric_limits<MC::Size>::max();
   Assert( N <= Nmax && Nf <= Nmax, N );
@@ -280,20 +232,20 @@ MC* MC::make(const vector<uint> &Ls, uint n_fields)
   #define ELSE_TRY_MC(dim_, n_) \
   else if (dim == dim_ && n_fields == n_) \
   { \
-    array<uint,dim_> L, Lp; \
+    array<uint,dim_> L_, Lp; \
     uint Lp0 = 1; \
-    for (int d=dim-1; d>=0; --d) { L[d] = Ls[d]; Lp[d] = Lp0; Lp0 *= Ls[d]; } \
-    mc = new MC_<dim_,n_>(L, Ls, Lp, N); \
+    for (int d=dim-1; d>=0; --d) { L_[d] = L[d]; Lp[d] = Lp0; Lp0 *= L[d]; } \
+    mc = new MC_<dim_,n_>(L_, L, Lp, N); \
   }
   
   if (false) {}
-  //ELSE_TRY_MC(1,1)
+  ELSE_TRY_MC(1,1)
   //ELSE_TRY_MC(1,2)
-  //ELSE_TRY_MC(2,1)
+  ELSE_TRY_MC(2,1)
   //ELSE_TRY_MC(2,2)
-  ELSE_TRY_MC(3,6)
+  //ELSE_TRY_MC(3,6)
   else
-    Assert(false, dim, N);
+    Assert(false, L, N);
   
   #undef ELSE_TRY_MC
   
@@ -323,15 +275,16 @@ int main(const int argc, char *argv[])
       ("help,h",                               "print help message")
       ("verbose,v",                            "print verbose output");
   
-  po::options_description system_options("system options");
+  po::options_description system_options("physics options");
   system_options.add_options()
-      (",L",   po::value<vector<uint>>(),             "lengths")
-      (",n",   po::value<uint>()->default_value(1),   "for an O(n) model")
+      ("L",    po::value<vector<uint>>(),             "lengths")
+      ("n",    po::value<uint>()->default_value(1),   "for an O(n) model")
       ("beta", po::value<double>()->default_value(0), "thermodynamic beta");
   
   po::options_description simulation_options("simulation options");
   simulation_options.add_options()
-      ("sweeps", po::value<uint64_t>()->default_value(1), "# of MC sweeps");
+      ("sweeps", po::value<uint64_t>()->default_value(1), "# of MC sweeps")
+      ("file",  po::value<string>(),                      "save file");
   
   po::options_description cmdline_options;
   cmdline_options.add(generic_options)
@@ -351,7 +304,7 @@ int main(const int argc, char *argv[])
     return 0;
   }
   
-  if ( !vm.count("L") )
+  if ( !vm.count("L") ) // todo: file
   {
     std::cerr << "L is required" << std::endl;
     return 1;
@@ -360,9 +313,17 @@ int main(const int argc, char *argv[])
   MC *mc = MC::make(vm["L"].as<vector<uint>>(), vm["n"].as<uint>());
   mc->clear_spins();
   mc->beta = vm["beta"].as<double>();
-  const uint64_t nSweeps = vm["sweeps"]
-  FOR(i, )
+  
+  const uint64_t nSweeps = vm["sweeps"].as<uint64_t>();
+  for (uint64_t sweep=0; sweep<nSweeps; ++sweep)
     mc->update();
+  
+  if ( vm.count("file") )
+  {
+    std::ofstream file( vm["file"].as<string>() );
+    file << *mc;
+  }
+  
   delete mc;
   
   std::cout << debug_num << std::endl;

@@ -3,6 +3,7 @@
 
 //#include <glib.h>
 
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -20,11 +21,14 @@
 
 #include <execinfo.h>
 
+using std::string;
 using std::unique_ptr;
 using std::array;
 using std::vector;
 using std::tuple;
 using std::pair;
+using std::ostream;
+using std::istream;
 
 #ifdef DEBUG
 constexpr bool debug = true;
@@ -55,19 +59,19 @@ constexpr bool debug = false;
 
 /*
 template<size_t i, size_t n, typename... Ts>
-std::ostream& tuple_streamer_helper(std::ostream &os, const tuple<Ts...> &t)
+ostream& tuple_streamer_helper(ostream &os, const tuple<Ts...> &t)
 { return os << std::get<n-i>(t) << ", "; }
 
 template<typename... Ts>
-std::ostream& tuple_streamer_helper<0,0,Ts...>(std::ostream &os, const tuple<Ts...> &)
+ostream& tuple_streamer_helper<0,0,Ts...>(ostream &os, const tuple<Ts...> &)
 { return os; }
 
 template<size_t n, typename... Ts>
-std::ostream& tuple_streamer_helper<1,n,Ts...>(std::ostream &os, const tuple<Ts...> &t)
+ostream& tuple_streamer_helper<1,n,Ts...>(ostream &os, const tuple<Ts...> &t)
 { return os << std::get<n-1>(t); }
 
 template<typename... Ts>
-std::ostream& operator<<(std::ostream &os, const tuple<Ts> &t)
+ostream& operator<<(ostream &os, const tuple<Ts> &t)
 {
   constexpr n = std::tuple_size<decltype(t)>::value;
   return os << '{' << tuple_streamer_helper<n,n>(os, t) << '}';
@@ -75,7 +79,7 @@ std::ostream& operator<<(std::ostream &os, const tuple<Ts> &t)
 */
 
 template<typename T>
-std::ostream& operator<<(std::ostream &os, const vector<T> &v)
+ostream& operator<<(ostream &os, const vector<T> &v)
 {
   const size_t n = v.size();
   os << '{';
@@ -85,7 +89,7 @@ std::ostream& operator<<(std::ostream &os, const vector<T> &v)
 }
 
 template<typename T, size_t n>
-std::ostream& operator<<(std::ostream &os, const array<T,n> &a)
+ostream& operator<<(ostream &os, const array<T,n> &a)
 {
   os << '{';
   FOR(i, n-1)
@@ -93,39 +97,39 @@ std::ostream& operator<<(std::ostream &os, const array<T,n> &a)
   return os << a[n-1] << '}';
 }
 
-std::ostream& operator<<(std::ostream &os, const tuple<>&)
+ostream& operator<<(ostream &os, const tuple<>&)
 { return os << "{}"; }
 
 template<typename T0>
-std::ostream& operator<<(std::ostream &os, const tuple<T0> &t)
+ostream& operator<<(ostream &os, const tuple<T0> &t)
 { return os << '{' << std::get<0>(t) << '}'; }
 
 template<typename T0, typename T1>
-std::ostream& operator<<(std::ostream &os, const tuple<T0,T1> &t)
+ostream& operator<<(ostream &os, const tuple<T0,T1> &t)
 { return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << '}'; }
 
 template<typename T0, typename T1, typename T2>
-std::ostream& operator<<(std::ostream &os, const tuple<T0,T1,T2> &t)
+ostream& operator<<(ostream &os, const tuple<T0,T1,T2> &t)
 { return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << ", " << std::get<2>(t) << '}'; }
 
 template<typename T0, typename T1, typename T2, typename T3>
-std::ostream& operator<<(std::ostream &os, const tuple<T0,T1,T2,T3> &t)
+ostream& operator<<(ostream &os, const tuple<T0,T1,T2,T3> &t)
 { return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << ", " << std::get<2>(t) << ", " << std::get<3>(t) << '}'; }
 
 template<typename T0, typename T1, typename T2, typename T3, typename T4>
-std::ostream& operator<<(std::ostream &os, const tuple<T0,T1,T2,T3,T4> &t)
+ostream& operator<<(ostream &os, const tuple<T0,T1,T2,T3,T4> &t)
 { return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << ", " << std::get<2>(t) << ", " << std::get<3>(t) << ", " << std::get<4>(t) << '}'; }
 
 template<typename T0, typename T1, typename T2, typename T3, typename T4, typename T5>
-std::ostream& operator<<(std::ostream &os, const tuple<T0,T1,T2,T3,T4,T5> &t)
+ostream& operator<<(ostream &os, const tuple<T0,T1,T2,T3,T4,T5> &t)
 { return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << ", " << std::get<2>(t) << ", " << std::get<3>(t) << ", " << std::get<4>(t) << ", " << std::get<5>(t) << '}'; }
 
 template<typename T0, typename T1, typename T2, typename T3, typename T4, typename T5, typename T6>
-std::ostream& operator<<(std::ostream &os, const tuple<T0,T1,T2,T3,T4,T5,T6> &t)
+ostream& operator<<(ostream &os, const tuple<T0,T1,T2,T3,T4,T5,T6> &t)
 { return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << ", " << std::get<2>(t) << ", " << std::get<3>(t) << ", " << std::get<4>(t) << ", " << std::get<5>(t) << ", " << std::get<6>(t) << '}'; }
 
 template<typename T0, typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7>
-std::ostream& operator<<(std::ostream &os, const tuple<T0,T1,T2,T3,T4,T5,T6,T7> &t)
+ostream& operator<<(ostream &os, const tuple<T0,T1,T2,T3,T4,T5,T6,T7> &t)
 { return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << ", " << std::get<2>(t) << ", " << std::get<3>(t) << ", " << std::get<4>(t) << ", " << std::get<5>(t) << ", " << std::get<6>(t) << ", " << std::get<7>(t) << '}'; }
 
 static void print_backtrace()

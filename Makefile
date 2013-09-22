@@ -1,4 +1,4 @@
-CXX		= g++
+CXX		= clang++
 CXXFLAGS	= -pipe -g -std=c++11 \
 -Isrc \
 -Wall -Wextra -Wstrict-overflow=5 -Winit-self -Wcast-align \
