@@ -43,10 +43,8 @@ constexpr bool debug = false;
 // prints additional info on failed assertion
 // eg: Assert_(5 < x && x < y, x, y)
 #define Assert(x, ...) \
-  do \
-  { \
-    if ( debug && unlikely(!(x)) ) \
-    { \
+  do { \
+    if ( debug && unlikely(!(x)) ) { \
       print_backtrace(); \
       std::cerr << "\nAssertion false: " __FILE__ ":" << __LINE__ << " : '"#x"'" << std::endl \
                 << #__VA_ARGS__ " = " << std::make_tuple(__VA_ARGS__) << std::endl; \
@@ -54,83 +52,58 @@ constexpr bool debug = false;
     } \
   } while(0)
 
-#define FOR(i,n) for (uint i=0; i<n; ++i)
+#define FOR(i,n) for (typename std::remove_const<decltype(n)>::type i=0; i<n; ++i)
 #define _this (*this)
-
-/*
-template<size_t i, size_t n, typename... Ts>
-ostream& tuple_streamer_helper(ostream &os, const tuple<Ts...> &t)
-{ return os << std::get<n-i>(t) << ", "; }
-
-template<typename... Ts>
-ostream& tuple_streamer_helper<0,0,Ts...>(ostream &os, const tuple<Ts...> &)
-{ return os; }
-
-template<size_t n, typename... Ts>
-ostream& tuple_streamer_helper<1,n,Ts...>(ostream &os, const tuple<Ts...> &t)
-{ return os << std::get<n-1>(t); }
-
-template<typename... Ts>
-ostream& operator<<(ostream &os, const tuple<Ts> &t)
-{
-  constexpr n = std::tuple_size<decltype(t)>::value;
-  return os << '{' << tuple_streamer_helper<n,n>(os, t) << '}';
-}
-*/
 
 template<typename T>
 ostream& operator<<(ostream &os, const vector<T> &v)
 {
   const size_t n = v.size();
   os << '{';
-  FOR(i, n-1)
-    os << v[i] << ", ";
-  return os << v[n-1] << '}';
+  if (n)
+  {
+    FOR(i, n-1)
+      os << v[i] << ", ";
+    os << v[n-1];
+  }
+  return os << '}';
 }
 
 template<typename T, size_t n>
 ostream& operator<<(ostream &os, const array<T,n> &a)
 {
   os << '{';
-  FOR(i, n-1)
-    os << a[i] << ", ";
-  return os << a[n-1] << '}';
+  if (n)
+  {
+    FOR(i, n-1)
+      os << a[i] << ", ";
+    os << a[n-1];
+  }
+  return os << '}';
 }
 
-ostream& operator<<(ostream &os, const tuple<>&)
-{ return os << "{}"; }
+template<typename T, size_t i, size_t n>
+struct TupleStreamHelper {
+  static void print(ostream &os, const T &t)
+  { os << std::get<i>(t) << ", ";
+    TupleStreamHelper<T,i+1,n>::print(os, t); }
+};
 
-template<typename T0>
-ostream& operator<<(ostream &os, const tuple<T0> &t)
-{ return os << '{' << std::get<0>(t) << '}'; }
+template<typename T, size_t n>
+struct TupleStreamHelper<T, n, n> {
+  static void print(ostream &os, const T &t) { os << std::get<n>(t); }
+};
 
-template<typename T0, typename T1>
-ostream& operator<<(ostream &os, const tuple<T0,T1> &t)
-{ return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << '}'; }
-
-template<typename T0, typename T1, typename T2>
-ostream& operator<<(ostream &os, const tuple<T0,T1,T2> &t)
-{ return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << ", " << std::get<2>(t) << '}'; }
-
-template<typename T0, typename T1, typename T2, typename T3>
-ostream& operator<<(ostream &os, const tuple<T0,T1,T2,T3> &t)
-{ return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << ", " << std::get<2>(t) << ", " << std::get<3>(t) << '}'; }
-
-template<typename T0, typename T1, typename T2, typename T3, typename T4>
-ostream& operator<<(ostream &os, const tuple<T0,T1,T2,T3,T4> &t)
-{ return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << ", " << std::get<2>(t) << ", " << std::get<3>(t) << ", " << std::get<4>(t) << '}'; }
-
-template<typename T0, typename T1, typename T2, typename T3, typename T4, typename T5>
-ostream& operator<<(ostream &os, const tuple<T0,T1,T2,T3,T4,T5> &t)
-{ return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << ", " << std::get<2>(t) << ", " << std::get<3>(t) << ", " << std::get<4>(t) << ", " << std::get<5>(t) << '}'; }
-
-template<typename T0, typename T1, typename T2, typename T3, typename T4, typename T5, typename T6>
-ostream& operator<<(ostream &os, const tuple<T0,T1,T2,T3,T4,T5,T6> &t)
-{ return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << ", " << std::get<2>(t) << ", " << std::get<3>(t) << ", " << std::get<4>(t) << ", " << std::get<5>(t) << ", " << std::get<6>(t) << '}'; }
-
-template<typename T0, typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7>
-ostream& operator<<(ostream &os, const tuple<T0,T1,T2,T3,T4,T5,T6,T7> &t)
-{ return os << '{' << std::get<0>(t) << ", " << std::get<1>(t) << ", " << std::get<2>(t) << ", " << std::get<3>(t) << ", " << std::get<4>(t) << ", " << std::get<5>(t) << ", " << std::get<6>(t) << ", " << std::get<7>(t) << '}'; }
+template<typename... Ts>
+ostream& operator<<(ostream &os, const tuple<Ts...> &t)
+{
+  typedef tuple<Ts...> T;
+  constexpr size_t n = std::tuple_size<T>::value;
+  os << '{';
+  if (n)
+    TupleStreamHelper<T,0,n-1>::print(os, t);
+  return os << '}';
+}
 
 static void print_backtrace()
 {

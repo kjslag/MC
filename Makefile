@@ -1,24 +1,16 @@
-CXX		= clang++
-CXXFLAGS	= -pipe -g -std=c++11 \
--Isrc \
--Wall -Wextra -Wstrict-overflow=5 -Winit-self -Wcast-align \
--Wno-missing-field-initializers \
--O3 -march=native -mfpmath=sse -ffast-math
-# -Wno-ignored-qualifiers -Wno-comment
-# -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include \
-# -Wunsafe-loop-optimizations
-# -fstrict-aliasing -fstrict-overflow \
-# -fvisibility-inlines-hidden
-# -I. -I/usr/include \
-# -g3 -fno-rtti -ftree-vectorizer-verbose=7 -ftree-vectorize -falign-functions -fno-implement-inlines
-# -fomit-frame-pointer -flto -fwhole-program -Ofast
+CXX		= g++
+CXXFLAGS	= -pipe -g -std=c++11 -Isrc \
+-Wall -Wextra -Wstrict-overflow=5 -Wstrict-aliasing=1 -Wunsafe-loop-optimizations \
+-O4 -march=native -ffast-math -fwhole-program
+# -fopt-info-optimized-missed=optinfo
+# -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include
 LDFLAGS		= -lm -lboost_program_options -rdynamic
 # -lglib-2.0
 # echo "" | gcc -march=native -v -E - 2>&1 | grep cc1
 
 all: MC
 
-MC: src/MC.cpp src/util.hh Makefile
+MC: src/MC.cpp src/util.hh
 	$(CXX) $< -o $@ $(CXXFLAGS) $(LDFLAGS) -DDEBUG
 
 callgrind: MC
@@ -28,4 +20,18 @@ cachegrind: MC
 	valgrind --tool=cachegrind ./MC
 
 clean:
-	rm MC
+	rm -f MC
+
+run: MC
+	echo > jobs
+	all=""; \
+	for L in 1 10 100 1000 10000 100000; \
+	do	for beta in 0 0.25 0.5 1 2 3 4; \
+		do	f="results/ising_$${L}_$${beta}"; \
+			echo -e "$$f:\n\t./MC --L $$L --beta $$beta --sweep 1000 --file $$f\n" >> jobs; \
+			all="$$all $$f"; \
+		done; \
+	done; \
+	echo "all:$$all" >> jobs
+	mkdir -p results
+	make -j4 -f jobs all

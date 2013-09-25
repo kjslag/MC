@@ -1,10 +1,9 @@
-// make && echo > jobs && for L in 64 128; do for beta in 0 0.25 0.5 1 2; do f="results/ising_${L}_${beta}"; echo -e "$f:\n\t./MC --L $L --L $L --beta $beta --sweep 10000 --file $f\n" >> jobs; done; done
-
 typedef unsigned uint;
 typedef double Float;
+typedef long double LongFloat;
 
 static bool verbose = false;
-double debug_num = 0;
+float debug_num = 0;
 
 #include "util.hh"
 
@@ -39,23 +38,17 @@ protected:
       N(N_),
       L_(L_v),
       n_(n__),
-     _newSpinStack(new Index[N_]),
-      index_dist(0, N_-1),
-      _nSweeps(0)
+      bool_dist(0, 1),
+     _nSweeps(0)
   { }
   
-  vector<bool>              _cluster;
-  const unique_ptr<Index[]> _newSpinStack;
-  Index *_newSpin;
-  Size _nFlip;
-  
   std::mt19937                          random_engine; // todo seed
-  std::uniform_int_distribution<Index>  index_dist;
+  std::uniform_int_distribution<int>    bool_dist;
   std::uniform_real_distribution<Float> uniform_dist;
-  std::normal_distribution<Float>       normal_dist;
+  std::normal_distribution<Float>       normal_dist; // todo: a divide by 0 is possible
   
   uint64_t _nSweeps;
-  vector<double> _sum1, _sum2, _sum4;
+  vector<Float> _sum2, _sum4;
 };
 MC::~MC() {}
 
@@ -66,47 +59,51 @@ ostream& operator<<(ostream &os, const MC &mc)
      << "\"L\" -> "    << mc.L_ << ",\n"
      << "\"beta\" -> " << mc.beta << ",\n"
      << "\"moments\" -> {" << mc._nSweeps << ", "
-                           << mc._sum1    << ", "
                            << mc._sum2    << ", "
                            << mc._sum4    << "}\n";
   return os << "}\n";
 }
 
-template<uint n>
+template<uint n, typename _float=Float>
 struct Spin_
 {
-  Float& operator[](uint k)       { return _s[k]; }
-  Float  operator[](uint k) const { return _s[k]; }
+  _float& operator[](uint k)       { return _s[k]; }
+  _float  operator[](uint k) const { return _s[k]; }
   
-  void  operator+=(const Spin_ &s) { FOR(k,n) _s[k] += s[k]; }
-  void  operator*=(Float        x) { FOR(k,n) _s[k] *= x;    }
+  template<typename _float_>
+  void  operator+=(Spin_<n,_float_> s)       { FOR(k,n) _s[k] += s[k]; }
+  Spin_ operator+ (Spin_            s) const { s += _this; return s; }
   
-  Float operator|(const Spin_ &s) const { Float x=0; FOR(k,n) x += _s[k]*s[k]; return x; } // dot product
+  void  operator*=(_float x)       { FOR(k,n) _s[k] *= x; }
+  Spin_ operator* (_float x) const { Spin_ s = _this; s *= x; return s; }
+  
+  _float operator|(Spin_ s) const { _float x=0; FOR(k,n) x += _s[k]*s[k]; return x; } // dot product
   
   void flip(Spin_ r)
-  { r *= Float(-2) * (_this|r);
+  { r *= _float(-2) * (_this|r);
     _this += r; }
   
   void normalize()
-  { Float norm = 1/sqrt(_this | _this);
+  { _float norm = 1/sqrt(_this | _this);
     FOR(k,n) _s[k] *= norm; }
   
 private:
-  array<Float,n> _s;
+  array<_float,n> _s;
 };
 
-template<uint dim,              // # of spacial dimensions
-         uint n>                // # of fields
+template<uint dim, // # of spacial dimensions
+         uint n>   // # of spin components
 class MC_ : public MC
 {
 public:
-  typedef Spin_<n> Spin;
+  typedef Spin_<n,    Float>     Spin;
+  typedef Spin_<n,LongFloat> LongSpin;
   
   // lattice
   
   typedef array<uint,dim> Pos;
   
-  Index index(const Pos p) const
+  Index index(const Pos p) const // TODO
   {
     Index i = p[0];
     for (uint d=1; d<dim; ++d)
@@ -114,11 +111,10 @@ public:
     return i;
   }
   
-  Pos pos(Index i) const
+  Pos pos(Index i) const // TODO
   {
     Pos p;
-    for (int d=dim-1; d>=0; --d)
-    {
+    for (int d=dim-1; d>=0; --d) {
       p[d] = i%L[d];
       i /= L[d];
     }
@@ -126,8 +122,6 @@ public:
   }
   
   // MC
-  
-  virtual ~MC_() {}
   
   virtual void clear_spins()
   {
@@ -141,56 +135,85 @@ public:
   
   virtual void update() __attribute__((hot))
   {
-    _nFlip = 0;
-    while (2*_nFlip < N)
-    {
-      _cluster.assign(N, false);
+    const Spin r = random_spin();
+    
+    FOR(i, N) {
+      Size cluster = i;
+      const Pos p = pos(i);
       
-      const Spin r = random_spin();
-      _newSpin = _newSpinStack.get()-1;
-      add_spin(index_dist(random_engine), r);
-      
-      do
-      {
-        const Index j = *(_newSpin--);
-        const Pos   q = pos(j);
-        
-        FOR(d, dim)
-        for (int dir=-1; dir<=+1; dir+=2)
-        {
-          Pos p = q;
-          p[d] = (p[d] + L[d] + dir) % L[d];
-          const Index i = index(p);
-          if ( !_cluster[i] )
-          {
-            const Float delta_E = Float(2)*beta*(r|_spins[i])*(r|_spins[j]);
-            if ( uniform_dist(random_engine) > exp(delta_E) )
-              add_spin(i, r);
+      for (int dir=-1; dir<=+1; dir+=2)
+      FOR(d, dim) {
+        Pos q = p;
+        q[d] = (q[d] + L[d] + dir) % L[d];
+        const Index j = index(q);
+        if ( j < i ) {
+          const Float delta_E = -2*beta*(r|_spins[i])*(r|_spins[j]);
+          if ( delta_E <= 0 && uniform_dist(random_engine) > exp(delta_E) ) {
+            const Index j_cluster = getCluster(j, cluster);
+            if ( j_cluster < cluster ) {
+              _cluster[cluster] = j_cluster;
+              cluster = j_cluster;
+            }
           }
         }
       }
-      while ( _newSpin+1 != _newSpinStack.get() );
+      if ( cluster == i )
+        _cluster[i] = i;
     }
     
-    array<double,n> avg = {};
-    FOR(i,N) FOR(k,n) avg[k] += _spins[i][k];
+    FOR(i, N) {
+      const Index cluster = getCluster(i);
+      if ( i == cluster )
+      {
+        _clusterFlip [cluster]  = bool_dist(random_engine);
+        FOR(k,n) _clusterSpins[cluster][k] = _spins[i][k];
+      }
+      else
+        _clusterSpins[cluster] += _spins[i];
+      
+      if ( _clusterFlip[cluster] )
+        _spins[i].flip(r);
+    }
     
-    double avg2 = 0;
-    FOR(k,n) avg2 += avg[k]*avg[k];
+    Size nClusters = 0;
+    LongSpin  sumPerp, long_r;
+    FOR(k, n) { sumPerp[k] = 0; long_r[k] = r[k]; }
+    LongFloat sum2Par=0, sum4Par=0;
+    
+    FOR(i, N)
+      if ( i == _cluster[i] ) {
+        ++nClusters;
+        const LongSpin spin = _clusterSpins[i];
+        const LongFloat par = spin | long_r;
+        sumPerp += spin + long_r*(-par);
+        sum2Par += par*par;
+        sum4Par += par*par*par*par;
+      }
+    const LongFloat sum2 = (sumPerp|sumPerp) + sum2Par;
+    
+    _sum2.push_back(sum2);
+    _sum4.push_back(sum2*sum2 + 2*(sum2Par*sum2Par - sum4Par));
     
     ++_nSweeps;
-    _sum1.push_back( sqrt(avg2) );
-    _sum2.push_back( avg2       );
-    _sum4.push_back( avg2*avg2  );
   }
   
 protected:
-  void add_spin(const Index i, const Spin &r)
+  // set to candidate if it's lower
+  Index getCluster(Index i, const Index candidate=std::numeric_limits<Index>::max())
   {
-    ++_nFlip;
-    _spins[i].flip(r);
-    _cluster[i] = true;
-    *(++_newSpin) = i;
+    // find the cluster number
+    Index j = i;
+    do j = _cluster[j];
+    while (_cluster[j] != j);
+    j = std::min(j, candidate);
+    
+    // update cluster numbers
+    while (_cluster[i] != j) {
+      const Index t = _cluster[i];
+      _cluster[i] = j;
+      i = t;
+    }
+    return j;
   }
   
   Spin random_spin()
@@ -205,22 +228,30 @@ protected:
     : MC(N_, L_v, n),
       L(L_),
      _Lp(Lp),
-     _spins(new Spin[N_])
+     _spins(new Spin[N_]),
+     _cluster(new Size[N_]),
+     _clusterSpins(new LongSpin[N_]),
+     _clusterFlip(N_)
   { }
   
-  const array<uint,dim> L; // lengths
-  
   friend class MC;
+  
+  virtual ~MC_() {}
+  
+  const array<uint,dim> L; // lengths
   
 private:
   const array<uint,dim> _Lp; // _Lp[d] = L[d+1] * ... * L[dim]
   
-  const unique_ptr<Spin[]> _spins;
+  const unique_ptr<Spin[]>     _spins; // todo: try __restrict__
+  const unique_ptr<Size[]>     _cluster;
+  const unique_ptr<LongSpin[]> _clusterSpins;
+  vector<bool>                 _clusterFlip;
 };
 
 MC* MC::make(const vector<uint> &L, uint n_fields)
 {
-  size_t N  = 1;
+  size_t N = 1;
   long double Nf = 1;
   const uint dim = L.size();
   FOR(d,dim) { N *= L[d]; Nf *= L[d]; }
@@ -241,8 +272,8 @@ MC* MC::make(const vector<uint> &L, uint n_fields)
   if (false) {}
   ELSE_TRY_MC(1,1)
   //ELSE_TRY_MC(1,2)
-  ELSE_TRY_MC(2,1)
-  //ELSE_TRY_MC(2,2)
+  //ELSE_TRY_MC(2,1)
+  ELSE_TRY_MC(2,2)
   //ELSE_TRY_MC(3,6)
   else
     Assert(false, L, N);
@@ -298,14 +329,12 @@ int main(const int argc, char *argv[])
   verbose = vm.count("verbose"); // todo
   
   /// generic options
-  if ( vm.count("help") )
-  {
+  if ( vm.count("help") ) {
     std::cout << cmdline_options << std::endl;
     return 0;
   }
   
-  if ( !vm.count("L") ) // todo: file
-  {
+  if ( !vm.count("L") ) { // todo: file
     std::cerr << "L is required" << std::endl;
     return 1;
   }
@@ -318,15 +347,15 @@ int main(const int argc, char *argv[])
   for (uint64_t sweep=0; sweep<nSweeps; ++sweep)
     mc->update();
   
-  if ( vm.count("file") )
-  {
+  if ( vm.count("file") ) {
     std::ofstream file( vm["file"].as<string>() );
     file << *mc;
   }
   
   delete mc;
   
-  std::cout << debug_num << std::endl;
+  if ( debug_num )
+    std::cout << debug_num << std::endl;
   
   return 0;
 }
