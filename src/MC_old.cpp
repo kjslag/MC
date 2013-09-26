@@ -39,16 +39,18 @@ protected:
       L_(L_v),
       n_(n__),
       bool_dist(0, 1),
-     _nSweeps(0)
+      index_dist(0, N_-1),
+      _nSweeps(0)
   { }
   
   std::mt19937                          random_engine; // todo seed
   std::uniform_int_distribution<int>    bool_dist;
+  std::uniform_int_distribution<Index>  index_dist;
   std::uniform_real_distribution<Float> uniform_dist;
-  std::normal_distribution<Float>       normal_dist; // todo: a divide by 0 is possible
+  std::normal_distribution<Float>       normal_dist;
   
   uint64_t _nSweeps;
-  vector<Float> _sum2, _sum4;
+  vector<double> _sum1, _sum2, _sum4;
 };
 MC::~MC() {}
 
@@ -135,87 +137,58 @@ public:
   
   virtual void update() __attribute__((hot))
   {
+    _cluster.assign(N, false);
     const Spin r = random_spin();
     
-    FOR(i, N) {
-      Size cluster = i;
-      const Pos p = pos(i);
+    for (Index startIndex=0, clusterNum=0; startIndex<N; ++startIndex)
+    if (!_cluster[startIndex]) {
+      const bool flipCluster = bool_dist(random_engine);
+      Index *newIndex = _newIndexStack.get();
       
-      for (int dir=-1; dir<=+1; dir+=2)
-      FOR(d, dim) {
-        Pos q = p;
-        q[d] = (q[d] + L[d] + dir) % L[d];
-        const Index j = index(q);
-        if ( j < i ) {
-          const Float delta_E = -2*beta*(r|_spins[i])*(r|_spins[j]);
-          if ( delta_E <= 0 && uniform_dist(random_engine) > exp(delta_E) ) {
-            const Index j_cluster = getCluster(j, cluster);
-            if ( j_cluster < cluster ) {
-              _cluster[cluster] = j_cluster;
-              cluster = j_cluster;
+      *newIndex = startIndex;
+      _cluster[startIndex] = true;
+      FOR(k,n) _clusterSpins[clusterNum][k] = _spins[startIndex][k];
+      if ( flipCluster )
+        _spins[startIndex].flip(r);
+      
+      do {
+        const Index j = *(newIndex--);
+        const Pos   q = pos(j);
+        
+        FOR(d, dim)
+        for (int dir=-1; dir<=+1; dir+=2) {
+          Pos p = q;
+          p[d] = (p[d] + L[d] + dir) % L[d];
+          const Index i = index(p);
+          if ( !_cluster[i] ) {
+            const Float delta_E = Float(2)*beta*(r|_spins[i])*(r|_spins[j]);
+            if ( uniform_dist(random_engine) > exp(delta_E) ) {
+              *(++newIndex) = i;
+              _cluster[i] = true;
+              _clusterSpins[clusterNum] += _spins[i];
+              if ( flipCluster )
+                _spins[i].flip(r);
             }
           }
         }
       }
-      if ( cluster == i )
-        _cluster[i] = i;
+      while ( newIndex+1 != _newIndexStack.get() );
+      ++clusterNum;
     }
     
-    FOR(i, N) {
-      const Index cluster = getCluster(i);
-      if ( i == cluster )
-      {
-        _clusterFlip[cluster] = bool_dist(random_engine);
-        FOR(k,n) _clusterSpins[cluster][k] = _spins[i][k];
-      }
-      else
-        _clusterSpins[cluster] += _spins[i];
-      
-      if ( _clusterFlip[cluster] )
-        _spins[i].flip(r);
-    }
+    array<double,n> avg = {};
+    FOR(i,N) FOR(k,n) avg[k] += _spins[i][k];
     
-    Size nClusters = 0;
-    LongSpin  sumPerp, long_r;
-    FOR(k, n) { sumPerp[k] = 0; long_r[k] = r[k]; }
-    LongFloat sum2Par=0, sum4Par=0;
-    
-    FOR(i, N)
-      if ( i == _cluster[i] ) {
-        ++nClusters;
-        const LongSpin spin = _clusterSpins[i];
-        const LongFloat par = spin | long_r;
-        sumPerp += spin + long_r*(-par);
-        sum2Par += par*par;
-        sum4Par += par*par*par*par;
-      }
-    const LongFloat sum2 = (sumPerp|sumPerp) + sum2Par;
-    
-    _sum2.push_back(sum2);
-    _sum4.push_back(sum2*sum2 + 2*(sum2Par*sum2Par - sum4Par));
+    double avg2 = 0;
+    FOR(k,n) avg2 += avg[k]*avg[k];
     
     ++_nSweeps;
+    _sum1.push_back( sqrt(avg2) );
+    _sum2.push_back( avg2       );
+    _sum4.push_back( avg2*avg2  );
   }
   
 protected:
-  // set to candidate if it's lower
-  Index getCluster(Index i, const Index candidate=std::numeric_limits<Index>::max())
-  {
-    // find the cluster number
-    Index j = i;
-    do j = _cluster[j];
-    while (_cluster[j] != j);
-    j = std::min(j, candidate);
-    
-    // update cluster numbers
-    while (_cluster[i] != j) {
-      const Index t = _cluster[i];
-      _cluster[i] = j;
-      i = t;
-    }
-    return j;
-  }
-  
   Spin random_spin()
   {
     Spin s;
@@ -228,9 +201,8 @@ protected:
     : MC(N_, L_v, n),
       L(L__),
      _spins(new Spin[N_]),
-     _cluster(new Size[N_]),
-     _clusterSpins(new LongSpin[N_]),
-     _clusterFlip(N_)
+     _newIndexStack(new Index[N_]),
+     _clusterSpins(new LongSpin[N_])
   { }
   
   friend class MC;
@@ -240,10 +212,10 @@ protected:
   const array<uint,dim> L; // lengths
   
 private:
-  const unique_ptr<Spin[]>     _spins; // todo: try __restrict__
-  const unique_ptr<Size[]>     _cluster;
+  const unique_ptr<Spin[]>  _spins;
+  vector<bool>              _cluster;
+  const unique_ptr<Index[]> _newIndexStack;
   const unique_ptr<LongSpin[]> _clusterSpins;
-  vector<bool>                 _clusterFlip;
 };
 
 MC* MC::make(const vector<uint> &L, uint n_fields)
@@ -267,11 +239,11 @@ MC* MC::make(const vector<uint> &L, uint n_fields)
   
   if (false) {}
   ELSE_TRY_MC(1,1)
-  ELSE_TRY_MC(1,6)
-  ELSE_TRY_MC(2,1)
-  ELSE_TRY_MC(2,6)
-  ELSE_TRY_MC(3,1)
-  ELSE_TRY_MC(3,6)
+  //ELSE_TRY_MC(1,6)
+  //ELSE_TRY_MC(2,1)
+  //ELSE_TRY_MC(2,6)
+  //ELSE_TRY_MC(3,1)
+  //ELSE_TRY_MC(3,6)
   else
     Assert(false, L, N);
   

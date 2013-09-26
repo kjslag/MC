@@ -1,6 +1,7 @@
 CXX		= g++
 CXXFLAGS	= -pipe -g -std=c++11 -Isrc \
 -Wall -Wextra -Wstrict-overflow=5 -Wstrict-aliasing=1 -Wunsafe-loop-optimizations \
+-Wpedantic -Wshadow -Wno-conversion -Wdisabled-optimization -Wsuggest-attribute=pure -Wsuggest-attribute=const \
 -O4 -march=native -ffast-math -fwhole-program
 # -fopt-info-optimized-missed=optinfo
 # -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include
@@ -35,3 +36,6 @@ run: MC
 	echo "all:$$all" >> jobs
 	mkdir -p results
 	make -j4 -f jobs all
+
+# lose:
+# time ./MC --L 1000000 --beta 0 --sweep 10
