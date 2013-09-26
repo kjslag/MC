@@ -26,10 +26,10 @@ clean:
 run: MC
 	echo > jobs
 	all=""; \
-	for L in 1 10 100 1000 10000 100000; \
-	do	for beta in 0 0.25 0.5 1 2 3 4; \
+	for L in 1 10 100 1000; \
+	do	for beta in 0 0.25 0.5 1 2 4; \
 		do	f="results/ising_$${L}_$${beta}"; \
-			echo -e "$$f:\n\t./MC --L $$L --beta $$beta --sweep 1000 --file $$f\n" >> jobs; \
+			echo -e "$$f:\n\t./MC --L $$L --L $$L --n 2 --beta $$beta --sweep 100 --file $$f\n" >> jobs; \
 			all="$$all $$f"; \
 		done; \
 	done; \

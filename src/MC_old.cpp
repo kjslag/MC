@@ -161,7 +161,7 @@ public:
           p[d] = (p[d] + L[d] + dir) % L[d];
           const Index i = index(p);
           if ( !_cluster[i] ) {
-            const Float delta_E = Float(2)*beta*(r|_spins[i])*(r|_spins[j]);
+            const Float delta_E = Float(2)*beta*(r|_spins[i])*(r|_spins[j]); // TODO assumes flip..
             if ( uniform_dist(random_engine) > exp(delta_E) ) {
               *(++newIndex) = i;
               _cluster[i] = true;
@@ -176,16 +176,24 @@ public:
       ++clusterNum;
     }
     
-    array<double,n> avg = {};
-    FOR(i,N) FOR(k,n) avg[k] += _spins[i][k];
+    Size nClusters = 0;
+    LongSpin  sumPerp, long_r;
+    FOR(k, n) { sumPerp[k] = 0; long_r[k] = r[k]; }
+    LongFloat sum2Par=0, sum4Par=0;
     
-    double avg2 = 0;
-    FOR(k,n) avg2 += avg[k]*avg[k];
+    FOR(c, clusterNum) {
+      const LongSpin spin = _clusterSpins[c];
+      const LongFloat par = spin | long_r;
+      sumPerp += spin + long_r*(-par);
+      sum2Par += par*par;
+      sum4Par += par*par*par*par;
+    }
+    const LongFloat sum2 = (sumPerp|sumPerp) + sum2Par;
+    
+    _sum2.push_back(sum2);
+    _sum4.push_back(sum2*sum2 + 2*(sum2Par*sum2Par - sum4Par));
     
     ++_nSweeps;
-    _sum1.push_back( sqrt(avg2) );
-    _sum2.push_back( avg2       );
-    _sum4.push_back( avg2*avg2  );
   }
   
 protected:
