@@ -3,7 +3,7 @@ typedef double Float;
 typedef long double LongFloat;
 
 static bool verbose = false;
-float debug_num = 0;
+long double debug_num = 0;
 
 #include "util.hh"
 
@@ -43,7 +43,7 @@ protected:
       _nSweeps(0)
   { }
   
-  std::mt19937                          random_engine; // todo seed
+  std::mt19937                          random_engine; // todo seed & try mt19937_64
   std::uniform_int_distribution<int>    bool_dist;
   std::uniform_int_distribution<Index>  index_dist;
   std::uniform_real_distribution<Float> uniform_dist;
@@ -164,7 +164,7 @@ public:
           if ( !_cluster[i] ) {
             const Float delta_E = 2*(2*flipCluster-1)*beta*(r|_spins[i])*(r|_spins[j]);
             //debug_num += exp(uniform_dist(random_engine));
-            if ( uniform_dist(random_engine) > exp(delta_E) ) {
+            if ( delta_E < 0 && uniform_dist(random_engine) > exp(delta_E) ) {
               *(++newIndex) = i;
               _cluster[i] = true;
               _clusterSpins[clusterNum] += _spins[i];
