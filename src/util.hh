@@ -10,6 +10,7 @@
 #include <memory>
 #include <random>
 #include <tuple>
+#include <functional>
 #include <utility>
 
 #include <cstdio>
@@ -50,7 +51,7 @@ constexpr bool debug = false;
                 << #__VA_ARGS__ " = " << std::make_tuple(__VA_ARGS__) << std::endl; \
       exit(1); \
     } \
-  } while(0)
+  } while(false)
 
 #define FOR(i,n) for (typename std::remove_const<decltype(n)>::type i=0; i<n; ++i)
 #define _this (*this)

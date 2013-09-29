@@ -27,15 +27,12 @@ run: MC
 	echo > jobs
 	all=""; \
 	for L in 1 10 100 1000; \
-	do	for beta in 0 0.25 0.5 1 2 4; \
-		do	f="results/ising_$${L}_$${beta}"; \
-			echo -e "$$f:\n\t./MC --L $$L --L $$L --n 2 --beta $$beta --sweep 100 --file $$f\n" >> jobs; \
+	do	for J in 0 0.25 0.5 1 2 4; \
+		do	f="results/ising_$${L}_$${J}"; \
+			echo -e "$$f:\n\t./MC --L $$L --L $$L --n 6 --J $$J --sweep 100 --file $$f\n" >> jobs; \
 			all="$$all $$f"; \
 		done; \
 	done; \
 	echo "all:$$all" >> jobs
 	mkdir -p results
 	make -j4 -f jobs all
-
-# lose:
-# time ./MC --L 1000000 --beta 0 --sweep 10

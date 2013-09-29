@@ -23,9 +23,12 @@ public:
   
   virtual void clear_spins() =0;
   virtual void randomize_spins() =0;
-  virtual void update() =0;
   
-  Float              beta;
+  virtual void  local_update() =0;
+  virtual void   fast_update() =0;
+  virtual void global_update() =0;
+  
+  Float              J;
   const Size         N; // number of spins
   const vector<uint> L_;
   const uint         n_;
@@ -34,7 +37,7 @@ public:
   
 protected:
   MC(Size N_, const vector<uint> &L_v, uint n__)
-    : beta(0),
+    : J(0),
       N(N_),
       L_(L_v),
       n_(n__),
@@ -57,9 +60,9 @@ MC::~MC() {}
 ostream& operator<<(ostream &os, const MC &mc)
 {
   os << "{\n"
-     << "\"n\" -> "    << mc.n_ << ",\n"
-     << "\"L\" -> "    << mc.L_ << ",\n"
-     << "\"beta\" -> " << mc.beta << ",\n"
+     << "\"n\" -> " << mc.n_ << ",\n"
+     << "\"L\" -> " << mc.L_ << ",\n"
+     << "\"J\" -> " << mc.J << ",\n"
      << "\"moments\" -> {" << mc._nSweeps << ", "
                            << mc._sum2    << ", "
                            << mc._sum4    << "}\n";
@@ -74,7 +77,9 @@ struct Spin_
   
   template<typename _float_>
   void  operator+=(Spin_<n,_float_> s)       { FOR(k,n) _s[k] += s[k]; }
+  void  operator-=(Spin_            s)       { FOR(k,n) _s[k] -= s[k]; }
   Spin_ operator+ (Spin_            s) const { s += _this; return s; }
+  Spin_ operator- (Spin_            s) const { s -= _this; return s; }
   
   void  operator*=(_float x)       { FOR(k,n) _s[k] *= x; }
   Spin_ operator* (_float x) const { Spin_ s = _this; s *= x; return s; }
@@ -89,6 +94,8 @@ struct Spin_
   { _float norm = 1/sqrt(_this | _this);
     FOR(k,n) _s[k] *= norm; }
   
+  void zero() { FOR(k,n) _s[k] = 0; }
+  
 private:
   array<_float,n> _s;
 };
@@ -98,14 +105,15 @@ template<uint dim, // # of spacial dimensions
 class MC_ : public MC
 {
 public:
-  typedef Spin_<n,    Float>     Spin;
-  typedef Spin_<n,LongFloat> LongSpin;
+  typedef Spin_<n,    Float> Spin;
+  typedef Spin_<n,LongFloat> SpinSum;
+  typedef array<Index,2*dim> NearestNeighbors;
   
   // lattice
   
   typedef array<uint,dim> Pos;
   
-  Index index(const Pos p) const // TODO
+  Index index(const Pos p) const // todo: try blocking
   {
     Index i = p[0];
     for (uint d=1; d<dim; ++d)
@@ -113,7 +121,7 @@ public:
     return i;
   }
   
-  Pos pos(Index i) const // TODO
+  Pos pos(Index i) const // todo: try blocking
   {
     Pos p;
     for (int d=dim-1; d>=0; --d) {
@@ -121,6 +129,24 @@ public:
       i /= L[d];
     }
     return p;
+  }
+  
+  NearestNeighbors nearestNeighbors(const Index i)
+  {
+    NearestNeighbors nn;
+    const Pos p = pos(i);
+    
+    uint k = 0;
+    FOR(d, dim)
+    for (int dir=-1; dir<=+1; dir+=2) {
+      Pos q = p;
+      q[d] = (q[d] + L[d] + dir) % L[d];
+      const Index j = index(q);
+      
+      nn[k] = j;
+    }
+    
+    return nn;
   }
   
   // MC
@@ -135,7 +161,79 @@ public:
   virtual void randomize_spins()
   { FOR(i,N) _spins[i] = random_spin(); }
   
-  virtual void update() __attribute__((hot))
+  virtual void local_update() __attribute__((hot))
+  {
+    for (Size count=0; count<N; ) {
+      const Index i = index_dist(random_engine);
+      const Pos   p = pos(i);
+      
+      const Spin s1 = _spins[i];
+      const Spin s2 = random_spin();
+      const Spin ds = s2 - s1;
+      Float delta_E = 0;
+      if (_V)
+        delta_E += _V(s2) - _V(s1);
+      FOR(d, dim)
+      for (int dir=-1; dir<=+1; dir+=2) {
+        Pos q = p;
+        q[d] = (q[d] + L[d] + dir) % L[d];
+        const Index j = index(q);
+        
+        delta_E += J*(ds|_spins[j]);
+      }
+      
+      if ( delta_E <= 0 || uniform_dist(random_engine) < exp(-delta_E) ) {
+        _spins[i] = s2;
+        ++count;
+      }
+    }
+    
+    SpinSum sum;
+    sum.zero();
+    FOR(i, N)
+      sum += _spins[i];
+    LongFloat sum2 = sum|sum;
+    
+    _sum2.push_back(sum2);
+    _sum4.push_back(sum2*sum2);
+    
+    ++_nSweeps;
+    _fast_update_sublattice = 2;
+  }
+  
+  virtual void fast_update() __attribute__((hot))
+  {
+    FOR(d, dim)
+      Assert( L[d]%2 == 0, L[d] );
+    
+    if ( _fast_update_sublattice == 2 )
+      _fast_update_sublattice = bool_dist(random_engine);
+    else
+      _fast_update_sublattice = !_fast_update_sublattice;
+    
+    for (Index i0=0; i0<N; i0+=N/L[dim-1]) {
+      const Pos p0 = pos(i0);
+      Index i = _fast_update_sublattice;
+      FOR(d, dim-1)
+        i += p0[d];
+      
+      for (i = i%2; i<i0+L[dim-1]; i+=2) {
+        const Spin s1 = _spins[i];
+        Spin sn; sn.zero();
+        
+        /*FOR(d, dim)
+        for (int dir=-1; dir<=+1; dir+=2) {
+          Pos q = p;
+          q[d] = (q[d] + L[d] + dir) % L[d];
+          const Index j = index(q);
+        }*/
+      }
+    }
+    
+    ++_nSweeps;
+  }
+  
+  virtual void global_update() __attribute__((hot))
   {
     _cluster.assign(N, false);
     const Spin r = random_spin();
@@ -154,15 +252,12 @@ public:
       
       do {
         const Index j = *(newIndex--);
-        const Pos   q = pos(j);
+        const NearestNeighbors nn = nearestNeighbors(j);
         
-        FOR(d, dim)
-        for (int dir=-1; dir<=+1; dir+=2) {
-          Pos p = q;
-          p[d] = (p[d] + L[d] + dir) % L[d];
-          const Index i = index(p);
+        FOR(k, 2*dim) {
+          const Index i = nn[k];
           if ( !_cluster[i] ) {
-            const Float delta_E = 2*(2*flipCluster-1)*beta*(r|_spins[i])*(r|_spins[j]);
+            const Float delta_E = 2*(2*flipCluster-1)*J*(r|_spins[i])*(r|_spins[j]);
             //debug_num += exp(uniform_dist(random_engine));
             if ( delta_E < 0 && uniform_dist(random_engine) > exp(delta_E) ) {
               *(++newIndex) = i;
@@ -178,14 +273,15 @@ public:
       ++clusterNum;
     }
     
-    LongSpin  sumPerp, long_r;
-    FOR(k, n) { sumPerp[k] = 0; long_r[k] = r[k]; }
+    SpinSum sumPerp, long_r;
+    sumPerp.zero();
+    FOR(k, n) long_r[k] = r[k];
     LongFloat sum2Par=0, sum4Par=0;
     
     FOR(c, clusterNum) {
-      const LongSpin spin = _clusterSpins[c];
+      const SpinSum spin = _clusterSpins[c];
       const LongFloat par = spin | long_r;
-      sumPerp += spin + long_r*(-par);
+      sumPerp += spin - long_r*par;
       sum2Par += par*par;
       sum4Par += par*par*par*par;
     }
@@ -195,6 +291,7 @@ public:
     _sum4.push_back(sum2*sum2 + 2*(sum2Par*sum2Par - sum4Par));
     
     ++_nSweeps;
+    _fast_update_sublattice = 2;
   }
   
 protected:
@@ -211,7 +308,8 @@ protected:
       L(L__),
      _spins(new Spin[N_]),
      _newIndexStack(new Index[N_]),
-     _clusterSpins(new LongSpin[N_])
+     _clusterSpins(new SpinSum[N_]),
+     _fast_update_sublattice(2)
   { }
   
   friend class MC;
@@ -221,10 +319,12 @@ protected:
   const array<uint,dim> L; // lengths
   
 private:
-  const unique_ptr<Spin[]>     _spins;
-  vector<bool>                 _cluster;
-  const unique_ptr<Index[]>    _newIndexStack;
-  const unique_ptr<LongSpin[]> _clusterSpins;
+  const unique_ptr<Spin[]>    _spins;
+  vector<bool>                _cluster;
+  const unique_ptr<Index[]>   _newIndexStack;
+  const unique_ptr<SpinSum[]> _clusterSpins;
+  std::function<Float(Spin)>  _V;
+  uint                        _fast_update_sublattice; /// 0: A sublattice, 1: B sublattice, 2: random
 };
 
 MC* MC::make(const vector<uint> &L, uint n_fields)
@@ -248,14 +348,14 @@ MC* MC::make(const vector<uint> &L, uint n_fields)
   
   if (false) {}
   ELSE_TRY_MC(1,1)
-  ELSE_TRY_MC(1,6)
-  ELSE_TRY_MC(2,1)
+//   ELSE_TRY_MC(1,6)
+//   ELSE_TRY_MC(2,1)
   ELSE_TRY_MC(2,6)
-  ELSE_TRY_MC(3,1)
-  ELSE_TRY_MC(3,6)
-  ELSE_TRY_MC(4,1)
+//   ELSE_TRY_MC(3,1)
+//   ELSE_TRY_MC(3,6)
+//   ELSE_TRY_MC(4,1)
   else
-    Assert(false, L, N);
+    Assert(false, L, N); // todo
   
   #undef ELSE_TRY_MC
   
@@ -287,9 +387,9 @@ int main(const int argc, char *argv[])
   
   po::options_description system_options("physics options");
   system_options.add_options()
-      ("L",    po::value<vector<uint>>(),             "lengths")
-      ("n",    po::value<uint>()->default_value(1),   "for an O(n) model")
-      ("beta", po::value<double>()->default_value(0), "thermodynamic beta");
+      ("L", po::value<vector<uint>>(),             "lengths")
+      ("n", po::value<uint>()->default_value(1),   "for an O(n) model")
+      ("J", po::value<double>()->default_value(0), "spin coupling");
   
   po::options_description simulation_options("simulation options");
   simulation_options.add_options()
@@ -320,11 +420,11 @@ int main(const int argc, char *argv[])
   
   MC *mc = MC::make(vm["L"].as<vector<uint>>(), vm["n"].as<uint>());
   mc->clear_spins();
-  mc->beta = vm["beta"].as<double>();
+  mc->J = vm["J"].as<double>();
   
   const uint64_t nSweeps = vm["sweeps"].as<uint64_t>();
   for (uint64_t sweep=0; sweep<nSweeps; ++sweep)
-    mc->update();
+    mc->global_update();
   
   if ( vm.count("file") ) {
     std::ofstream file( vm["file"].as<string>() );
