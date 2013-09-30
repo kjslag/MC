@@ -56,6 +56,8 @@ constexpr bool debug = false;
 #define FOR(i,n) for (typename std::remove_const<decltype(n)>::type i=0; i<n; ++i)
 #define _this (*this)
 
+template<uint n, typename T> T Pow(T x) { return (n>=2 ? Pow<n/2>(x*x) : 1)*(n%2 ? x : 1); }
+
 template<typename T>
 ostream& operator<<(ostream &os, const vector<T> &v)
 {

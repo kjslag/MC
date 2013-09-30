@@ -7,6 +7,8 @@ long double debug_num = 0;
 
 #include "util.hh"
 
+struct SpinFunc;
+
 class MC
 {
 public:
@@ -27,6 +29,8 @@ public:
   virtual void  local_update() =0;
   virtual void   fast_update() =0;
   virtual void global_update() =0;
+  
+  virtual void set_V(const SpinFunc *V) =0;
   
   Float              J;
   const Size         N; // number of spins
@@ -50,7 +54,7 @@ protected:
   std::uniform_int_distribution<int>    bool_dist;
   std::uniform_int_distribution<Index>  index_dist;
   std::uniform_real_distribution<Float> uniform_dist;
-  std::normal_distribution<Float>       normal_dist; // todo: a divide by 0 is possible
+  std::normal_distribution<Float>       normal_dist;
   
   uint64_t _nSweeps;
   vector<Float> _sum2, _sum4;
@@ -72,6 +76,17 @@ ostream& operator<<(ostream &os, const MC &mc)
 template<uint n, typename _float=Float>
 struct Spin_
 {
+  static struct Zero {} zero;
+
+  Spin_() = default;
+  Spin_(Zero) { FOR(k,n) _s[k] = 0; }
+  Spin_(const Spin_ &s) = default;
+  Spin_(const array<_float,n> &s) : _s(s) {}
+  
+  template<typename _float_> explicit
+  Spin_(const Spin_<n,_float_> &s)
+  { FOR(k,n) _s[k] = s[k]; }
+  
   _float& operator[](uint k)       { return _s[k]; }
   _float  operator[](uint k) const { return _s[k]; }
   
@@ -82,22 +97,40 @@ struct Spin_
   Spin_ operator- (Spin_            s) const { s -= _this; return s; }
   
   void  operator*=(_float x)       { FOR(k,n) _s[k] *= x; }
+  void  operator/=(_float x)       { FOR(k,n) _s[k] /= x; }
   Spin_ operator* (_float x) const { Spin_ s = _this; s *= x; return s; }
   
   _float operator|(Spin_ s) const __attribute__((pure)) { _float x=0; FOR(k,n) x += _s[k]*s[k]; return x; } // dot product
   
-  void flip(Spin_ r)
-  { r *= _float(-2) * (_this|r);
-    _this += r; }
+  void flip(Spin_ r) { r *= _float(-2) * (_this|r); _this += r; normalize(); }
   
-  void normalize()
-  { _float norm = 1/sqrt(_this | _this);
-    FOR(k,n) _s[k] *= norm; }
-  
-  void zero() { FOR(k,n) _s[k] = 0; }
+  void normalize() { _this /= sqrt(_this|_this); }
   
 private:
   array<_float,n> _s;
+};
+
+struct SpinFunc { virtual ~SpinFunc(); };
+SpinFunc::~SpinFunc() {}
+
+template<uint n>
+struct SpinFunc_ : public SpinFunc
+{
+  virtual ~SpinFunc_() {}
+  virtual Float operator()(const Spin_<n> &s) const =0;
+};
+
+template<uint n>
+struct ExternalFieldPotential_ : public SpinFunc_<n>
+{
+  typedef Spin_<n> Spin;
+  
+  ExternalFieldPotential_(const Spin &s) : h(s) {}
+  
+  Float operator()(const Spin &s) const
+  { return -(s|h); }
+  
+  Spin h;
 };
 
 template<uint dim, // # of spacial dimensions
@@ -143,7 +176,7 @@ public:
       q[d] = (q[d] + L[d] + dir) % L[d];
       const Index j = index(q);
       
-      nn[k] = j;
+      nn[k++] = j;
     }
     
     return nn;
@@ -165,22 +198,15 @@ public:
   {
     for (Size count=0; count<N; ) {
       const Index i = index_dist(random_engine);
-      const Pos   p = pos(i);
       
       const Spin s1 = _spins[i];
       const Spin s2 = random_spin();
       const Spin ds = s2 - s1;
       Float delta_E = 0;
       if (_V)
-        delta_E += _V(s2) - _V(s1);
-      FOR(d, dim)
-      for (int dir=-1; dir<=+1; dir+=2) {
-        Pos q = p;
-        q[d] = (q[d] + L[d] + dir) % L[d];
-        const Index j = index(q);
-        
-        delta_E += J*(ds|_spins[j]);
-      }
+        delta_E += V(s2) - V(s1);
+      for(Index nn : nearestNeighbors(i))
+        delta_E += J*(ds|_spins[nn]);
       
       if ( delta_E <= 0 || uniform_dist(random_engine) < exp(-delta_E) ) {
         _spins[i] = s2;
@@ -188,14 +214,7 @@ public:
       }
     }
     
-    SpinSum sum;
-    sum.zero();
-    FOR(i, N)
-      sum += _spins[i];
-    LongFloat sum2 = sum|sum;
-    
-    _sum2.push_back(sum2);
-    _sum4.push_back(sum2*sum2);
+    measure();
     
     ++_nSweeps;
     _fast_update_sublattice = 2;
@@ -218,15 +237,13 @@ public:
         i += p0[d];
       
       for (i = i%2; i<i0+L[dim-1]; i+=2) {
-        const Spin s1 = _spins[i];
-        Spin sn; sn.zero();
+        //const Spin s1 = _spins[i];
+        Spin sn(Spin::zero);
         
-        /*FOR(d, dim)
-        for (int dir=-1; dir<=+1; dir+=2) {
-          Pos q = p;
-          q[d] = (q[d] + L[d] + dir) % L[d];
-          const Index j = index(q);
-        }*/
+        for(Index nn : nearestNeighbors(i))
+          sn += _spins[nn];
+        
+        //TODO
       }
     }
     
@@ -235,72 +252,107 @@ public:
   
   virtual void global_update() __attribute__((hot))
   {
-    _cluster.assign(N, false);
     const Spin r = random_spin();
     
-    Index clusterNum = 0;
-    for (Index startIndex=0; startIndex<N; ++startIndex)
+    SpinSum X(SpinSum::zero); // spin sum part that doesn't get flipped
+    _cluster.assign(N, false);
+    if (_V)
+      FOR(i, N) {
+        Spin s = _spins[i];
+        Float delta_V = V(s);
+        s.flip(r);
+        delta_V = V(s) - delta_V;
+        if ( delta_V > 0 && uniform_dist(random_engine) > exp(-delta_V) ) { // if site isn't marked
+          _cluster[i] = true;
+          X += _spins[i];
+        }
+      }
+    
+    Size nClusters = 0;
+    FOR(startIndex, N)
     if (!_cluster[startIndex]) {
       const bool flipCluster = bool_dist(random_engine);
       Index *newIndex = _newIndexStack.get();
       
       *newIndex = startIndex;
       _cluster[startIndex] = true;
-      FOR(k,n) _clusterSpins[clusterNum][k] = _spins[startIndex][k];
+      _clusterSums[nClusters] = SpinSum(_spins[startIndex]);
       if ( flipCluster )
         _spins[startIndex].flip(r);
       
       do {
         const Index j = *(newIndex--);
-        const NearestNeighbors nn = nearestNeighbors(j);
         
-        FOR(k, 2*dim) {
-          const Index i = nn[k];
+        for(Index i : nearestNeighbors(j))
           if ( !_cluster[i] ) {
-            const Float delta_E = 2*(2*flipCluster-1)*J*(r|_spins[i])*(r|_spins[j]);
+            const Float delta_E = 2*(1-2*flipCluster)*J*(r|_spins[i])*(r|_spins[j]);
             //debug_num += exp(uniform_dist(random_engine));
-            if ( delta_E < 0 && uniform_dist(random_engine) > exp(delta_E) ) {
+            if ( delta_E > 0 && uniform_dist(random_engine) > exp(-delta_E) ) {
               *(++newIndex) = i;
               _cluster[i] = true;
-              _clusterSpins[clusterNum] += _spins[i];
+              _clusterSums[nClusters] += _spins[i];
               if ( flipCluster )
                 _spins[i].flip(r);
             }
           }
-        }
       }
       while ( newIndex+1 != _newIndexStack.get() );
-      ++clusterNum;
+      ++nClusters;
     }
     
-    SpinSum sumPerp, long_r;
-    sumPerp.zero();
-    FOR(k, n) long_r[k] = r[k];
-    LongFloat sum2Par=0, sum4Par=0;
+    SpinSum Y(SpinSum::zero), // spin sum part that gets flipped
+            long_r(r);
+    LongFloat Y2=0, Y4=0;
     
-    FOR(c, clusterNum) {
-      const SpinSum spin = _clusterSpins[c];
-      const LongFloat par = spin | long_r;
-      sumPerp += spin - long_r*par;
-      sum2Par += par*par;
-      sum4Par += par*par*par*par;
+    FOR(c, nClusters) {
+      const SpinSum spin = _clusterSums[c];
+      const LongFloat y = spin | long_r;
+      X  += spin - long_r*y;
+      Y2 += Pow<2>(y);
+      Y4 += Pow<4>(y);
     }
-    const LongFloat sum2 = (sumPerp|sumPerp) + sum2Par;
+    const LongFloat
+      X2  = X|X,
+      Xr2 = Pow<2>(X|long_r),
+      Z2  = Y2,
+      Z4  = 3*Y2 - 2*Y4;
     
-    _sum2.push_back(sum2);
-    _sum4.push_back(sum2*sum2 + 2*(sum2Par*sum2Par - sum4Par));
+    //_sum2.push_back( X2 + Z2 );
+    //_sum4.push_back( Pow<2>(X2) + (2*X2 + Xr2)*Z2 + Z4 );
+    
+    measure(); // TODO
     
     ++_nSweeps;
     _fast_update_sublattice = 2;
   }
+  
+  virtual void set_V(const SpinFunc *V_)
+  {
+    _V = dynamic_cast<const SpinFunc_<n>*>(V_);
+    
+    if (V_) Assert(_V, n);
+  }
+  
+  Float V(const Spin &s) const { return (*_V)(s); }
   
 protected:
   Spin random_spin()
   {
     Spin s;
     FOR(k,n) s[k] = normal_dist(random_engine);
-    s.normalize();
+    s.normalize(); // todo: a divide by 0 is possible
     return s;
+  }
+  
+  void measure()
+  {
+    SpinSum sum(SpinSum::zero);
+    FOR(i, N)
+      sum += _spins[i];
+    LongFloat sum2 = sum|sum;
+    
+    _sum2.push_back(sum2);
+    _sum4.push_back(sum2*sum2);
   }
   
   MC_(const array<uint,dim> &L__, const vector<uint> &L_v, Size N_)
@@ -308,7 +360,8 @@ protected:
       L(L__),
      _spins(new Spin[N_]),
      _newIndexStack(new Index[N_]),
-     _clusterSpins(new SpinSum[N_]),
+     _clusterSums(new SpinSum[N_]),
+     _V(nullptr),
      _fast_update_sublattice(2)
   { }
   
@@ -319,12 +372,12 @@ protected:
   const array<uint,dim> L; // lengths
   
 private:
-  const unique_ptr<Spin[]>    _spins;
-  vector<bool>                _cluster;
-  const unique_ptr<Index[]>   _newIndexStack;
-  const unique_ptr<SpinSum[]> _clusterSpins;
-  std::function<Float(Spin)>  _V;
-  uint                        _fast_update_sublattice; /// 0: A sublattice, 1: B sublattice, 2: random
+  const unique_ptr<Spin[]>     _spins;
+  vector<bool>                 _cluster;
+  const unique_ptr<Index[]>    _newIndexStack;
+  const unique_ptr<SpinSum[]>  _clusterSums;
+  const SpinFunc_<n>          *_V;
+  uint                         _fast_update_sublattice; /// 0: A sublattice, 1: B sublattice, 2: random
 };
 
 MC* MC::make(const vector<uint> &L, uint n_fields)
@@ -348,12 +401,12 @@ MC* MC::make(const vector<uint> &L, uint n_fields)
   
   if (false) {}
   ELSE_TRY_MC(1,1)
-//   ELSE_TRY_MC(1,6)
-//   ELSE_TRY_MC(2,1)
-  ELSE_TRY_MC(2,6)
-//   ELSE_TRY_MC(3,1)
-//   ELSE_TRY_MC(3,6)
-//   ELSE_TRY_MC(4,1)
+//  ELSE_TRY_MC(1,6)
+//  ELSE_TRY_MC(2,1)
+//  ELSE_TRY_MC(2,6)
+//  ELSE_TRY_MC(3,1)
+//  ELSE_TRY_MC(3,6)
+//  ELSE_TRY_MC(4,1)
   else
     Assert(false, L, N); // todo
   
@@ -421,6 +474,10 @@ int main(const int argc, char *argv[])
   MC *mc = MC::make(vm["L"].as<vector<uint>>(), vm["n"].as<uint>());
   mc->clear_spins();
   mc->J = vm["J"].as<double>();
+  
+  const Spin_<1> h{{1}};
+  const ExternalFieldPotential_<1> V(h);
+  mc->set_V(&V);
   
   const uint64_t nSweeps = vm["sweeps"].as<uint64_t>();
   for (uint64_t sweep=0; sweep<nSweeps; ++sweep)
