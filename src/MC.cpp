@@ -252,7 +252,7 @@ public:
   
   virtual void global_update() __attribute__((hot))
   {
-    const Spin r = random_spin();
+    const Spin r = random_spin(); // todo
     
     SpinSum X(SpinSum::zero); // spin sum part that doesn't get flipped
     _cluster.assign(N, false);
@@ -262,23 +262,23 @@ public:
         Float delta_V = V(s);
         s.flip(r);
         delta_V = V(s) - delta_V;
-        if ( delta_V > 0 && uniform_dist(random_engine) > exp(-delta_V) ) { // if site isn't marked
-          _cluster[i] = true;
+        if ( delta_V > 0 && uniform_dist(random_engine) > exp(-delta_V) ) {
+          _cluster[i] = true; // unmark site
           X += _spins[i];
         }
       }
     
     Size nClusters = 0;
-    FOR(startIndex, N)
-    if (!_cluster[startIndex]) {
+    FOR(i0, N)
+    if (!_cluster[i0]) {
       const bool flipCluster = bool_dist(random_engine);
       Index *newIndex = _newIndexStack.get();
       
-      *newIndex = startIndex;
-      _cluster[startIndex] = true;
-      _clusterSums[nClusters] = SpinSum(_spins[startIndex]);
+      *newIndex = i0;
+      _cluster[i0] = true;
+      _clusterSums[nClusters] = SpinSum(_spins[i0]);
       if ( flipCluster )
-        _spins[startIndex].flip(r);
+        _spins[i0].flip(r);
       
       do {
         const Index j = *(newIndex--);
@@ -475,7 +475,7 @@ int main(const int argc, char *argv[])
   mc->clear_spins();
   mc->J = vm["J"].as<double>();
   
-  const Spin_<1> h{{1}};
+  const Spin_<1> h{{.1}};
   const ExternalFieldPotential_<1> V(h);
   mc->set_V(&V);
   
