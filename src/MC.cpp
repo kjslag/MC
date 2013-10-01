@@ -7,7 +7,17 @@ long double debug_num = 0;
 
 #include "util.hh"
 
+struct SpinFlipper;
 struct SpinFunc;
+
+// random
+
+std::mt19937                          random_engine; // todo seed & try mt19937_64
+std::uniform_int_distribution<int>    bool_dist(0, 1);
+std::uniform_real_distribution<Float> uniform_dist;
+std::normal_distribution<Float>       normal_dist;
+
+// MC
 
 class MC
 {
@@ -30,6 +40,7 @@ public:
   virtual void   fast_update() =0;
   virtual void global_update() =0;
   
+  virtual void set_flipper(SpinFlipper *flipper) =0;
   virtual void set_V(const SpinFunc *V) =0;
   
   Float              J;
@@ -45,16 +56,11 @@ protected:
       N(N_),
       L_(L_v),
       n_(n__),
-      bool_dist(0, 1),
       index_dist(0, N_-1),
       _nSweeps(0)
   { }
   
-  std::mt19937                          random_engine; // todo seed & try mt19937_64
-  std::uniform_int_distribution<int>    bool_dist;
-  std::uniform_int_distribution<Index>  index_dist;
-  std::uniform_real_distribution<Float> uniform_dist;
-  std::normal_distribution<Float>       normal_dist;
+  std::uniform_int_distribution<Index> index_dist;
   
   uint64_t _nSweeps;
   vector<Float> _sum2, _sum4;
@@ -72,6 +78,8 @@ ostream& operator<<(ostream &os, const MC &mc)
                            << mc._sum4    << "}\n";
   return os << "}\n";
 }
+
+// Spin_
 
 template<uint n, typename _float=Float>
 struct Spin_
@@ -102,20 +110,55 @@ struct Spin_
   
   _float operator|(Spin_ s) const __attribute__((pure)) { _float x=0; FOR(k,n) x += _s[k]*s[k]; return x; } // dot product
   
-  void flip(Spin_ r) { r *= _float(-2) * (_this|r); _this += r; normalize(); }
-  
   void normalize() { _this /= sqrt(_this|_this); }
+  
+  static Spin random()
+  {
+    Spin s;
+    FOR(k,n) s[k] = normal_dist(random_engine);
+    s.normalize(); // todo: a divide by 0 is possible
+    return s;
+  }
   
 private:
   array<_float,n> _s;
 };
 
+// SpinFlipper
+
+struct SpinFlipper {
+  virtual ~SpinFlipper();
+  virtual void reset() =0;
+};
+SpinFlipper::~SpinFlipper() {}
+
+template<uint n>
+struct SpinFlipper_ : public SpinFlipper {
+  virtual ~SpinFlipper_() {}
+  virtual void flip(Spin_<n> &s) const =0;
+};
+
+template<uint n>
+struct InvertSpin_ : public SpinFlipper_<n> {
+  typedef Spin_<n> Spin;
+  
+  void reset() { r = Spin::random(); }
+  
+  void flip(Spin_<n> &s) const {
+    s += r*(-2*(s|r));
+    s.normalize();
+  }
+  
+  Spin r;
+};
+
+// SpinFunc
+
 struct SpinFunc { virtual ~SpinFunc(); };
 SpinFunc::~SpinFunc() {}
 
 template<uint n>
-struct SpinFunc_ : public SpinFunc
-{
+struct SpinFunc_ : public SpinFunc {
   virtual ~SpinFunc_() {}
   virtual Float operator()(const Spin_<n> &s) const =0;
 };
@@ -132,6 +175,8 @@ struct ExternalFieldPotential_ : public SpinFunc_<n>
   
   Spin h;
 };
+
+// MC_
 
 template<uint dim, // # of spacial dimensions
          uint n>   // # of spin components
@@ -192,7 +237,7 @@ public:
   }
   
   virtual void randomize_spins()
-  { FOR(i,N) _spins[i] = random_spin(); }
+  { FOR(i,N) _spins[i] = Spin::random(); }
   
   virtual void local_update() __attribute__((hot))
   {
@@ -200,7 +245,7 @@ public:
       const Index i = index_dist(random_engine);
       
       const Spin s1 = _spins[i];
-      const Spin s2 = random_spin();
+      const Spin s2 = Spin::random();
       const Spin ds = s2 - s1;
       Float delta_E = 0;
       if (_V)
@@ -252,7 +297,7 @@ public:
   
   virtual void global_update() __attribute__((hot))
   {
-    const Spin r = random_spin(); // todo
+    _flipper->reset();
     
     SpinSum X(SpinSum::zero); // spin sum part that doesn't get flipped
     _cluster.assign(N, false);
@@ -260,7 +305,7 @@ public:
       FOR(i, N) {
         Spin s = _spins[i];
         Float delta_V = V(s);
-        s.flip(r);
+        _flipper->flip(s);
         delta_V = V(s) - delta_V;
         if ( delta_V > 0 && uniform_dist(random_engine) > exp(-delta_V) ) {
           _cluster[i] = true; // unmark site
@@ -278,7 +323,7 @@ public:
       _cluster[i0] = true;
       _clusterSums[nClusters] = SpinSum(_spins[i0]);
       if ( flipCluster )
-        _spins[i0].flip(r);
+        _flipper->flip(_spins[i0]);
       
       do {
         const Index j = *(newIndex--);
@@ -292,7 +337,7 @@ public:
               _cluster[i] = true;
               _clusterSums[nClusters] += _spins[i];
               if ( flipCluster )
-                _spins[i].flip(r);
+                _flipper->flip(_spins[i]);
             }
           }
       }
@@ -326,6 +371,17 @@ public:
     _fast_update_sublattice = 2;
   }
   
+  virtual void set_flipper(SpinFlipper *flipper)
+  {
+    if (flipper)
+    {
+      _flipper = dynamic_cast<SpinFlipper_<n>*>(flipper);
+      Assert(_flipper, n);
+    }
+    else
+      _flipper = &_invert_spin;
+  }
+  
   virtual void set_V(const SpinFunc *V_)
   {
     _V = dynamic_cast<const SpinFunc_<n>*>(V_);
@@ -336,14 +392,6 @@ public:
   Float V(const Spin &s) const { return (*_V)(s); }
   
 protected:
-  Spin random_spin()
-  {
-    Spin s;
-    FOR(k,n) s[k] = normal_dist(random_engine);
-    s.normalize(); // todo: a divide by 0 is possible
-    return s;
-  }
-  
   void measure()
   {
     SpinSum sum(SpinSum::zero);
@@ -361,6 +409,7 @@ protected:
      _spins(new Spin[N_]),
      _newIndexStack(new Index[N_]),
      _clusterSums(new SpinSum[N_]),
+     _flipper(&_invert_spin),
      _V(nullptr),
      _fast_update_sublattice(2)
   { }
@@ -376,7 +425,11 @@ private:
   vector<bool>                 _cluster;
   const unique_ptr<Index[]>    _newIndexStack;
   const unique_ptr<SpinSum[]>  _clusterSums;
+  
+  InvertSpin_<n>               _invert_spin;
+  SpinFlipper_<n>             *_flipper;
   const SpinFunc_<n>          *_V;
+  
   uint                         _fast_update_sublattice; /// 0: A sublattice, 1: B sublattice, 2: random
 };
 
