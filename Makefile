@@ -1,8 +1,10 @@
 CXX		= g++
 CXXFLAGS	= -pipe -g -std=c++11 -Isrc \
--Wall -Wextra -Wstrict-overflow=5 -Wstrict-aliasing=1 -Wunsafe-loop-optimizations \
--Wpedantic -Wshadow -Wno-conversion -Wdisabled-optimization -Wsuggest-attribute=pure -Wsuggest-attribute=const \
+-Wall -Wextra -Wstrict-aliasing=1 \
+-Wpedantic -Wshadow -Wdisabled-optimization -Wsuggest-attribute=pure -Wsuggest-attribute=const \
+-Wno-conversion -Wno-missing-braces \
 -O4 -march=native -ffast-math -fwhole-program -funsafe-loop-optimizations
+# -Wunsafe-loop-optimizations -Wstrict-overflow=5
 # -fopt-info-optimized-missed=optinfo
 # -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include
 LDFLAGS		= -lm -lboost_program_options -rdynamic
@@ -21,15 +23,16 @@ clean:
 	rm -f MC
 
 run: MC
-	echo > jobs
-	all=""; \
-	for L in 1 10 100 1000 10000; \
-	do	for J in 0 0.25 0.5 1 2 4; \
-		do	f="results/ising_$${L}_$${J}"; \
-			echo -e "$$f:\n\t./MC --L $$L --J $$J --sweep 1000 --file $$f\n" >> jobs; \
-			all="$$all $$f"; \
-		done; \
-	done; \
+	@echo > jobs
+	@all=""; \
+	   for method in smart; \
+	do for L in 20; \
+	do for J in `seq -1 .5 +4`; \
+	do for u in `seq -4 .5 +4`; \
+	do	f="results/vison_hexagon_sVBS_$${L}_$${J}_$${u}_$${method}"; \
+		echo -e "$$f:\n\t./MC --L $$L $$L $$L --J $$J --J $$u --potential 'vison hexagon s-VBS' --sweeps 1000 --update-method $$method --file $$f\n" >> jobs; \
+		all="$$all $$f"; \
+	done; done; done; done; \
 	echo "all:$$all" >> jobs
-	mkdir -p results
+	@mkdir -p results
 	make -j4 -f jobs all
