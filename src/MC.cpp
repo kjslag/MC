@@ -98,7 +98,6 @@ protected:
   virtual void set_potential_func(const SpinFunc *V) =0;
   
   virtual void  local_update(bool measure=true) =0;
-  virtual void   fast_update() =0;
   virtual void global_update(bool measure) =0;
   
   UpdateMethod _update_method;
@@ -404,8 +403,10 @@ public:
       const Spin s1 = _spins[i];
       const Spin s2 = n>1 ? Spin::random() : -s1;
       Float delta_E = 0;
+      
       if (_V)
         delta_E += V(s2) - V(s1);
+      
       Spin sum_nn(Spin::zero);
       for(Index nn : nearestNeighbors(i))
         sum_nn += _spins[nn];
@@ -419,37 +420,7 @@ public:
       measure();
     
     ++_nSweeps;
-    _update_sublattice = 2;
-  }
-  
-  virtual void fast_update() final __attribute__((hot))
-  {
-    FOR(d, dim)
-      Assert( L[d]%2 == 0, L[d] );
-    
-    if ( _update_sublattice == 2 )
-      _update_sublattice = bool_dist(random_engine);
-    else
-      _update_sublattice = !_update_sublattice;
-    
-    for (Index i0=0; i0<N; i0+=N/L[dim-1]) {
-      const Pos p0 = pos(i0);
-      Index i = _update_sublattice;
-      FOR(d, dim-1)
-        i += p0[d]%2; // check this
-      
-      for (i = i%2; i<i0+L[dim-1]; i+=2) {
-        //const Spin s1 = _spins[i];
-        Spin sn(Spin::zero);
-        
-        for(Index nn : nearestNeighbors(i))
-          sn += _spins[nn];
-        
-        //TODO
-      }
-    }
-    
-    ++_nSweeps;
+    //_update_sublattice = 2;
   }
   
   virtual void global_update(bool measure_) final __attribute__((hot))
@@ -532,7 +503,7 @@ public:
     //measure();
     
     ++_nSweeps;
-    _update_sublattice = 2;
+    //_update_sublattice = 2;
   }
   
   virtual void set_flipper(SpinFlipper *flipper) final
@@ -577,7 +548,7 @@ protected:
      _clusterSums(new SpinSum[N_]),
      _flipper(nullptr),
      _V(nullptr),
-     _update_sublattice(2),
+     //_update_sublattice(2),
      _check_flipper(false)
   { set_flipper(nullptr); }
   
@@ -607,7 +578,7 @@ private:
   SpinFlipper_<n>             *_flipper;
   const SpinFunc_<n>          *_V;
   
-  uint _update_sublattice; // 0: A sublattice, 1: B sublattice, 2: random
+  //uint _update_sublattice; // 0: A sublattice, 1: B sublattice, 2: random
   bool _check_flipper;
 };
 

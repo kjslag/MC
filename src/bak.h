@@ -105,6 +105,36 @@ private:
   std::uniform_int_distribution<uint> _dist;
 };
 
+  virtual void fast_update() final __attribute__((hot))
+  {
+    FOR(d, dim)
+      Assert( L[d]%2 == 0, L[d] );
+    
+    if ( _update_sublattice == 2 )
+      _update_sublattice = bool_dist(random_engine);
+    else
+      _update_sublattice = !_update_sublattice;
+    
+    for (Index i0=0; i0<N; i0+=N/L[dim-1]) {
+      const Pos p0 = pos(i0);
+      Index i = _update_sublattice;
+      FOR(d, dim-1)
+        i += p0[d]%2; // check this
+      
+      for (i = i%2; i<i0+L[dim-1]; i+=2) {
+        //const Spin s1 = _spins[i];
+        Spin sn(Spin::zero);
+        
+        for(Index nn : nearestNeighbors(i))
+          sn += _spins[nn];
+        
+        //TODO
+      }
+    }
+    
+    ++_nSweeps;
+  }
+  
 /*
 run: MC
         @echo > jobs
