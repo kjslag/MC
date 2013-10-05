@@ -104,3 +104,20 @@ private:
   SpinMatrix  R1;
   std::uniform_int_distribution<uint> _dist;
 };
+
+/*
+run: MC
+        @echo > jobs
+        @all=""; \
+           for method in smart; \
+        do for L in 20; \
+        do for J in `seq  0 .25 +3`; \
+        do for u in `seq -3 .25 +3`; \
+        do      f="results/vison_hexagon_sVBS_$${L}_$${J}_$${u}_$${method}"; \
+                echo -e "$$f:\n\t./MC --L $$L $$L $$L --J $$J --J $$u --potential 'vison hexagon s-VBS' --sweeps 1000 --update-method $$method --file $$f\n" >> jobs; \
+                all="$$all $$f"; \
+        done; done; done; done; \
+        echo "all:$$all" >> jobs
+        @mkdir -p results
+        make -j4 -f jobs all
+*/

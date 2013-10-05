@@ -14,6 +14,7 @@
 #include <tuple>
 #include <functional>
 #include <utility>
+#include <complex>
 
 #include <cstdio>
 #include <cmath>
@@ -34,6 +35,7 @@ using std::tuple;
 using std::pair;
 using std::ostream;
 using std::istream;
+using std::complex;
 using std::abs; // so that cmath/abs can shadow cstdlib/abs
 
 #ifdef DEBUG
@@ -66,6 +68,7 @@ constexpr bool debug = false;
 
 typedef const char *String;
 
+template<typename T> T sq(T x) { return x*x; }
 template<uint n, typename T> T Pow(T x) { return (n>=2 ? Pow<n/2>(x*x) : 1)*(n%2 ? x : 1); }
 
 static void print_backtrace()
