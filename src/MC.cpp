@@ -26,11 +26,66 @@ std::uniform_int_distribution<int>    bool_dist(0, 1);
 std::uniform_real_distribution<Float> uniform_dist;
 std::normal_distribution<Float>       normal_dist;
 
+// Value
+
+struct Value
+{
+  Value() : _count(0) {}
+  
+  void operator<<(double x)
+  {
+    uint k = 0;
+    next_bin:
+    
+    if ( k < _bins.size() ) {
+      Bin &bin = _bins[k];
+      
+      bin.x2 += x*x;
+      if ( !full(k) )
+        bin.x = x;
+      else {
+        x += bin.x;
+        ++k;
+        goto next_bin;
+      }
+    }
+    else
+      _bins.push_back(x);
+    
+    ++_count;
+  }
+  
+  double sum() const
+  {
+    double sum_ = 0;
+    const uint n = _bins.size();
+    FOR(k,n)
+      if ( full(k) )
+        sum_ += _bins[k].x;
+    return sum_;
+  }
+  
+  uint64_t count() const { return _count; }
+  
+private:
+  struct Bin {
+    Bin(double y) : x(y), x2(y*y) {}
+    
+    double x, x2;
+  };
+  
+  bool full(uint k) const
+  { return _count & (uint64_t(1) << k); }
+  
+  vector<Bin> _bins;
+  uint64_t    _count;
+};
+
 // MC
 
 class MC
 {
-  enum class UpdateMethod {local=0, global, smart, nMethods};
+  enum class UpdateMethod {local=0, global, nMethods};
 public:
   // lattice
   
@@ -59,16 +114,20 @@ public:
   
   void sweep(const uint64_t nSweeps)
   {
-    if ( _update_method == UpdateMethod::global && potential() )
-      std::cerr << "WARNING: global updates may not be ergodic with a nonzero potential" << std::endl;
-    
     FOR(sweepNum, nSweeps) {
       switch (_update_method) {
-        case UpdateMethod:: local:  local_update(); break;
-        case UpdateMethod::global: global_update(true); break;
-        case UpdateMethod:: smart: sweepNum%2 && sweepNum>0 ? local_update(false) : global_update(true); break; // TODO
+        case UpdateMethod:: local:
+          local_update();
+          break;
+        case UpdateMethod::global:
+          if (n_>1) {
+            global_update(false);
+            local_update (false);
+          }
+          global_update(true);
+          break;
         default:
-          Assert(false, int(_update_method));
+          Assert(false, _update_method);
       }
       
       if ( (sweepNum%100)==0 )
@@ -90,7 +149,7 @@ protected:
       N(N_),
       L_(L_v),
       n_(n__),
-     _update_method(UpdateMethod::smart),
+     _update_method(UpdateMethod::global),
       index_dist(0, N_-1),
      _nSweeps(0)
   { }
@@ -116,7 +175,6 @@ ostream& operator<<(ostream &os, MC::UpdateMethod method)
   switch (method) {
     case MC::UpdateMethod:: local: method_str =  "local"; break;
     case MC::UpdateMethod::global: method_str = "global"; break;
-    case MC::UpdateMethod:: smart: method_str =  "smart"; break;
     default:
       Assert(false, int(method));
   }
@@ -199,10 +257,12 @@ template<uint n>
 struct SpinFlipper_ : public SpinFlipper {
   typedef Spin_<n> Spin;
   virtual ~SpinFlipper_() {}
+  
+  void flip(Spin &s, bool measure) const { if (measure) s=-s; else flip(s); }
+  Spin flipped(Spin s, bool measure) const { flip(s,measure); return s; };
+  
+protected:
   virtual void flip(Spin &s) const =0; // must satisfy V(R.s) = V(s), and is assumed to be linear
-  virtual Spin flipped(Spin s) const { flip(s); return s; };
-  virtual Float delta(Spin s1, Spin s2) const // (R.s1).s2 - s1.s2 = s1.(R - 1).s2
-  { return (flipped(s1)|s2) - (s1|s2); }
 };
 
 template<uint n>
@@ -211,7 +271,6 @@ struct InvertSpin_ : public SpinFlipper_<n> {
   
   virtual void  reset() final { r = Spin::random(); }
   virtual void  flip(Spin &s) const final { s += r*(-2*(s|r)); }
-  virtual Float delta(Spin s1, Spin s2) const final { return -2*(r|s1)*(r|s2); }
   
   Spin r;
 };
@@ -416,11 +475,10 @@ public:
         _spins[i] = s2;
     }
     
-    if ( measure_ )
+    if (measure_)
       measure();
     
     ++_nSweeps;
-    //_update_sublattice = 2;
   }
   
   virtual void global_update(bool measure_) final __attribute__((hot))
@@ -430,13 +488,14 @@ public:
       FOR(i, 100) {
         _flipper->reset();
         const Spin s = Spin::random();
-        const Float delta_V = V(s) - V(_flipper->flipped(s));
+        const Float delta_V = V(s) - V(_flipper->flipped(s,i<3));
         Assert( abs(delta_V) < sqrt(std::numeric_limits<Float>::epsilon()), s, delta_V );
       }
       _check_flipper = false;
     }
     
-    _flipper->reset();
+    if ( !measure_ )
+      _flipper->reset();
     _cluster.assign(N, false);
     
     Size nClusters = 0;
@@ -450,21 +509,23 @@ public:
       if ( measure_ )
         _clusterSums[nClusters] = SpinSum(_spins[i0]);
       if ( flipCluster )
-        _flipper->flip(_spins[i0]);
+        _flipper->flip(_spins[i0], measure_);
       
       do {
         const Index j = *(newIndex--);
         
         for(Index i : nearestNeighbors(j))
           if ( !_cluster[i] ) {
-            const Float delta_E = -J*(1-2*flipCluster) * _flipper->delta(_spins[i], _spins[j]);
+            const Spin s = _spins[i];
+            const Spin flipped_s = _flipper->flipped(s, measure_);
+            const Float delta_E = -J*(1-2*flipCluster) * ((flipped_s-s)|_spins[j]);
             if ( delta_E > 0 && uniform_dist(random_engine) > exp(-delta_E) ) {
               *(++newIndex) = i;
               _cluster[i] = true;
               if ( measure_ )
-                _clusterSums[nClusters] += _spins[i];
+                _clusterSums[nClusters] += s;
               if ( flipCluster )
-                _flipper->flip(_spins[i]);
+                _spins[i] = flipped_s;
             }
           }
       }
@@ -472,38 +533,27 @@ public:
       ++nClusters;
     }
     
-    // assumes _flipper->flipped is linear
-    /*
-    SpinSum X(SpinSum::zero);
-    FOR(c, nClusters)
-      X += _clusterSums1[c] + _clusterSums2[c];
-    X *= .5;
-    
-    SpinSum Y(SpinSum::zero);
-    LongFloat Y0_2=0, Y0_4=0, Y4_0=0;
-    
-    FOR(c, nClusters) {
-      const SpinSum y  = (_clusterSums1[c] - _clusterSums2[c])*.5;
-      const Float  Xy2 = sq(X|y);
-      const Float   y2 = y|y;
-      Y0_2 += y2;
-      Y0_4 += y2*y2;
-      Y4_0 += Xy2;
+    if ( measure_ ) {
+      if (true) {
+        LongFloat Y2=0, Y4=0;
+        FOR(c, nClusters) {
+          const SpinSum y  = _clusterSums[c];
+          const Float   y2 = y|y;
+          Y2 += y2;
+          Y4 += y2*y2;
+        }
+        const LongFloat
+          Z2 = Y2,
+          Z4 = 3*sq(Y2) - 2*Y4;
+        
+        _sum2  .push_back(( Z2 )/sq(LongFloat(N)));
+        _sum2_2.push_back(( Z4 )/Pow<4>(LongFloat(N)));
+        // TODO sum4
+      } else
+        measure();
+      
+      ++_nSweeps;
     }
-    const LongFloat
-      X2   = X|X,
-      Z0_2 = Y0_2,
-      Z0_4 = 3*sq(Y0_2) - 2*Y0_4,
-      Z4_0 = Y4_0;
-    
-    _sum2  .push_back(( X2 + Z0_2 )/sq(LongFloat(N)));
-    _sum2_2.push_back(( sq(X2) + 2*X2*Z0_2 + Z4_0 + Z0_4 )/Pow<4>(LongFloat(N)));*/
-    // TODO sum4
-    
-    //measure();
-    
-    ++_nSweeps;
-    //_update_sublattice = 2;
   }
   
   virtual void set_flipper(SpinFlipper *flipper) final
@@ -548,7 +598,6 @@ protected:
      _clusterSums(new SpinSum[N_]),
      _flipper(nullptr),
      _V(nullptr),
-     //_update_sublattice(2),
      _check_flipper(false)
   { set_flipper(nullptr); }
   
@@ -578,7 +627,6 @@ private:
   SpinFlipper_<n>             *_flipper;
   const SpinFunc_<n>          *_V;
   
-  //uint _update_sublattice; // 0: A sublattice, 1: B sublattice, 2: random
   bool _check_flipper;
 };
 
@@ -605,8 +653,8 @@ unique_ptr<MC> MC::make(const vector<uint> &L, uint n_fields)
 //ELSE_TRY_MC(1,1)
 //ELSE_TRY_MC(1,2)
   ELSE_TRY_MC(2,1)
-//ELSE_TRY_MC(2,2)
-//ELSE_TRY_MC(2,3)
+  ELSE_TRY_MC(2,2)
+  ELSE_TRY_MC(2,3)
 //ELSE_TRY_MC(3,1)
   ELSE_TRY_MC(3,2)
   ELSE_TRY_MC(3,3)
@@ -686,7 +734,7 @@ int main(const int argc, char *argv[])
   simulation_options.add_options()
       ("sweeps",                 po::value<uint64_t>()->default_value(1),      "# of MC sweeps")
       ("file",                   po::value<string>(),                          "save file")
-      ("update-method",          po::value<string>()->default_value("smart"),  "update type: local, global, or smart");
+      ("update-method",          po::value<string>()->default_value("global"), "update type: local or global");
   
   po::options_description cmdline_options;
   cmdline_options.add(generic_options)
@@ -732,8 +780,9 @@ int main(const int argc, char *argv[])
     if ( V_str == "s^4" ) {
       Assert(J.size() == 1+1, J);
       potential = make_s4_Potential(J[1], n);
-      if      (n==2) spin_flipper = &signed_permutation_flipper_2;
+      if      (n==2) Assert(false, n); //spin_flipper = &signed_permutation_flipper_2;
       else if (n==3) spin_flipper = &signed_permutation_flipper_3;
+      else if (n==4) spin_flipper = &signed_permutation_flipper_4;
       else           Assert(false, n);
     } else if ( V_str.substr(0,3) == "cos" ) {
       check_n(2);
@@ -741,7 +790,6 @@ int main(const int argc, char *argv[])
       const uint m = from_string<uint>(V_str.substr(3));
       potential = make_s4_Potential(J[1], m);
       if      (m==2) spin_flipper = &cos2_flipper;
-      else if (m==3) spin_flipper = &cos3_flipper;
       else if (m==4) spin_flipper = &cos4_flipper;
       else if (m==6) spin_flipper = &cos6_flipper;
       else if (m==8) spin_flipper = &cos8_flipper;
