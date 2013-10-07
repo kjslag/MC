@@ -20,28 +20,6 @@ static void single_handler(int sig)
   exit(1);
 }
 
-ostream& operator<<(ostream &os, const MC &mc)
-{
-  const SpinFunc *const potential = mc.potential();
-  vector<Float> J{mc.J};
-  if (potential) {
-    const vector<Float> coefficients = potential->coefficients();
-    J.insert(J.end(), coefficients.begin(), coefficients.end());
-  }
-  
-  os << "{\n"
-        "\"L\" -> " << mc.L_ << ",\n"
-        "\"n\" -> " << mc.n_ << ",\n"
-        "\"J\" -> " <<    J  << ",\n"
-        "\"potential\" -> \""     << mc._potential_name << "\",\n"
-        "\"update method\" -> \"" << mc._update_method << "\",\n"
-         "\"sweeps\" -> "         << mc._nSweeps << ",\n"
-            "\"s^2\" -> value@"   << mc._sum2    << ",\n"
-        "\"(s^2)^2\" -> value@"   << mc._sum2_2  << ",\n"
-            "\"s^4\" -> value@"   << mc._sum4    << "\n";
-  return os << "}\n";
-}
-
 int main(const int argc, char *argv[])
 {
   using std::cout;

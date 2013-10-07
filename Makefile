@@ -14,7 +14,7 @@ LDFLAGS		= -lm -lboost_program_options -rdynamic
 
 all: MC
 
-MC: src/main.cpp src/MC.hh src/Value.hh src/util.hh src/SpinOperatorData.hh
+MC: src/MC.cpp src/util.hh src/SpinOperatorData.hh
 	$(CXX) $< -o $@ $(CXXFLAGS) $(LDFLAGS) -DDEBUG
 
 # valgrind --tool=callgrind  ./MC
