@@ -37,6 +37,8 @@ using std::ostream;
 using std::istream;
 using std::complex;
 using std::abs; // so that cmath/abs can shadow cstdlib/abs
+using std::min;
+using std::max;
 
 #ifdef DEBUG
 constexpr bool debug = true;
@@ -53,7 +55,7 @@ constexpr bool debug = false;
 #define Assert(x, ...) \
   do { \
     if ( debug && unlikely(!(x)) ) { \
-      print_backtrace(); \
+      /*print_backtrace();*/ \
       std::cerr << "\nAssertion false: " __FILE__ ":" << __LINE__ << " : '"#x"'" << std::endl \
                 << "{" #__VA_ARGS__ "} = " << std::make_tuple(__VA_ARGS__) << std::endl; \
       exit(1); \
@@ -152,6 +154,12 @@ T from_string(const string &str, const bool fail_if_leftover_characters = true)
   from_string(x, str, fail_if_leftover_characters);
   return x;
 }
+
+// 2^x for integers
+uint64_t exp2i(uint x) { return uint64_t(1)<<x; }
+
+template<typename T>
+bool is_small(T x) { return abs(x) < sqrt(std::numeric_limits<T>::epsilon()); }
 
 #ifdef USE_RdRand
 class RdRand

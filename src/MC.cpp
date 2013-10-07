@@ -30,56 +30,158 @@ std::normal_distribution<Float>       normal_dist;
 
 struct Value
 {
-  Value() : _count(0) {}
+  Value() : _n_samples(0), _means_bin_num(0) { _means.reserve(max_means); }
   
-  void operator<<(double x)
+  void operator<<(LongFloat x)
   {
-    uint k = 0;
-    next_bin:
+    Assert( _means_bin_num == calc_means_bin_num(),
+            max_means, _n_samples, _means_bin_num, calc_means_bin_num() );
     
-    if ( k < _bins.size() ) {
-      Bin &bin = _bins[k];
-      
-      bin.x2 += x*x;
-      if ( !full(k) )
-        bin.x = x;
-      else {
-        x += bin.x;
-        ++k;
-        goto next_bin;
+    uint k = 0; // bin number
+    next_bin: {
+      if ( k == _means_bin_num ) {
+        if ( _means.size() < max_means )
+          _means.push_back(x/exp2i(_means_bin_num));
+        else {
+          FOR(i, max_means/2)
+            _means[i] = (_means[2*i] + _means[2*i+1])/2;
+          _means.resize(max_means/2);
+          Assert( !full(k), k, _n_samples ); // else there would be double counting
+          ++_means_bin_num;
+           // x will be added later
+        }
       }
+      
+      if ( k < _binned_vec.size() ) {
+        Binned &binned = _binned_vec[k];
+        binned.x2 += x*x;
+        if ( !full(k) )
+          binned.x = x;
+        else {
+          x += binned.x;
+          binned.x = 0;
+          ++k;
+          goto next_bin;
+        }
+      } else
+        _binned_vec .push_back(x);
     }
-    else
-      _bins.push_back(x);
     
-    ++_count;
+    ++_n_samples;
   }
   
-  double sum() const
+  uint default_error_bin_num() const
+  { return max(int(_binned_vec.size()) - 6, 0); }
+  
+  LongFloat mean() const
   {
-    double sum_ = 0;
-    const uint n = _bins.size();
-    FOR(k,n)
-      if ( full(k) )
-        sum_ += _bins[k].x;
-    return sum_;
+    // TODO: calc from _binned_vec
+    const uint n_means = _means.size();
+    LongFloat mean_ = 0;
+    if ( n_means >= 2 ) {
+      for (uint i=1; i<n_means; ++i)
+        mean_ += _means[i];
+      mean_ /= n_means - 1;
+    } else
+      mean_ = NAN;
+    
+    if ( _n_samples>1 ) {
+      const uint bin_num = default_error_bin_num();
+      LongFloat x = mean(bin_num);
+      Assert( is_small((x-mean_)/(x+mean_)), mean_, x );
+    }
+    
+    return mean_;
   }
   
-  uint64_t count() const { return _count; }
+  LongFloat mean(uint bin_num) const
+  {
+    LongFloat mean_ = 0;
+    if ( _n_samples > 1 ) {
+      const uint n_bins = _binned_vec.size();
+      FOR(k, n_bins)
+        mean_ += _binned_vec[k].x;
+      mean_ -= _binned_vec[bin_num].first_x;
+      mean_ /= error_bin_count(bin_num);
+    } else
+      mean_ = NAN;
+    return mean_;
+  }
   
-private:
-  struct Bin {
-    Bin(double y) : x(y), x2(y*y) {}
+  const vector<LongFloat>& means() const { return _means; }
+  
+  LongFloat error() const { return _n_samples>1 ? error(default_error_bin_num()) : INFINITY; }
+  
+  LongFloat error(uint bin_num) const
+  {
+    const LongFloat mean_ = mean(bin_num);
+    const LongFloat x2 = _binned_vec[bin_num].x2 - _binned_vec[bin_num].first_x2;
+    const uint64_t n_samples = error_bin_count(bin_num);
+    return sqrt(max(LongFloat(0), x2 - n_samples*bin_size(bin_num)*mean_*mean_)) / n_samples;
+  }
+  
+  vector<LongFloat> binned_errors() const
+  {
+    vector<LongFloat> errors_;
+    const int n_bins = _binned_vec.size();
+    FOR(bin_num, n_bins-1)
+      errors_.push_back( error(bin_num) );
+    return errors_;
+  }
+  
+protected:
+  struct Binned {
+    Binned(LongFloat y) : x(y), x2(y*y), first_x(y), first_x2(y*y) {}
     
-    double x, x2;
+    LongFloat x;  // a partial sum
+    LongFloat x2; // binned x^2
+    const LongFloat first_x, first_x2;
   };
   
-  bool full(uint k) const
-  { return _count & (uint64_t(1) << k); }
+  friend ostream& operator<<(ostream &os, const Binned &binned);
+  friend ostream& operator<<(ostream &os, const Value  &value);
   
-  vector<Bin> _bins;
-  uint64_t    _count;
+  bool full(uint bin_num) const
+  { return _n_samples & exp2i(bin_num); }
+  
+  // number of samples per bin
+  static uint64_t bin_size(uint bin_num)
+  { return exp2i(bin_num); }
+  
+  // number of samples that went into _binned_vec[bin_num].x2
+  uint64_t error_bin_count(uint bin_num) const
+  { return (_n_samples & ~(bin_size(bin_num)-1)) - bin_size(bin_num); }
+  
+  uint calc_means_bin_num() const {
+    uint n = 0;
+    while ( exp2i(n)*max_means < _n_samples )
+      ++n;
+    return n;
+  }
+  
+private:
+  uint64_t          _n_samples;
+  vector<Binned>    _binned_vec; // indexed by bin_num
+  vector<LongFloat> _means;
+  uint              _means_bin_num;
+  
+  static const uint max_means;
 };
+const uint Value::max_means = 1u<<4; // should be a power of 2 // TODO change to 1<<8
+
+ostream& operator<<(ostream &os, const Value::Binned &binned)
+{ return os << "binned[" << binned.x << ", " << binned.x2 << ", " << binned.first_x << ", " << binned.first_x2 << "]"; }
+
+ostream& operator<<(ostream &os, const Value &value)
+{
+  return os << "value["                  << value.mean()
+            << ", "                      << value.error()
+            << ", \"means\" -> "         << value.means()
+            << ", \"binned errors\" -> " << value.binned_errors()
+            << ", \"# samples\" -> "     << value._n_samples
+            << ", \"_binned_vec\" -> "   << value._binned_vec
+            << "]";
+}
 
 // MC
 
@@ -489,7 +591,7 @@ public:
         _flipper->reset();
         const Spin s = Spin::random();
         const Float delta_V = V(s) - V(_flipper->flipped(s,i<3));
-        Assert( abs(delta_V) < sqrt(std::numeric_limits<Float>::epsilon()), s, delta_V );
+        Assert( is_small(delta_V), s, delta_V );
       }
       _check_flipper = false;
     }
@@ -707,6 +809,14 @@ int main(const int argc, char *argv[])
   using std::cout;
   using std::cerr;
   using std::endl;
+  
+  Value v;
+  FOR(i,200) {
+    cout << v << endl;
+    v << 1;
+  }
+  
+  return 0;
   
   // http://www.gnu.org/s/hello/manual/libc/Signal-Handling.html
   signal( SIGSEGV, single_handler );

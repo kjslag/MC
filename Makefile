@@ -3,7 +3,8 @@ CXXFLAGS	= -pipe -g -std=c++11 -Isrc \
 -Wall -Wextra -Wstrict-aliasing=1 \
 -Wpedantic -Wshadow -Wdisabled-optimization \
 -Wno-conversion -Wno-missing-braces \
--O4 -march=native -ffast-math -fwhole-program -funsafe-loop-optimizations
+
+#-O4 -march=native -ffast-math -fwhole-program -funsafe-loop-optimizations
 # -Wunsafe-loop-optimizations -Wstrict-overflow=5
 # -fopt-info-optimized-missed=optinfo
 # -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include
