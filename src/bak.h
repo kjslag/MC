@@ -16,16 +16,6 @@ struct ExternalFieldPotential_ : public SpinFunc_<n>
 
 
 template<uint n>
-using SpinMatrix_ = array<Spin_<n>,n>;
-
-template<uint n>
-Spin_<n> operator|(const SpinMatrix_<n> &M, const Spin_<n> s0) {
-  Spin_<n> s = s0;
-  FOR(k,n) s[k] = M[k] | s0;
-  return s;
-}
-
-template<uint n>
 struct RotateSpin_ : public SpinFlipper_<n> {
   typedef Spin_<n>       Spin;
   typedef SpinMatrix_<n> SpinMatrix;
@@ -97,3 +87,26 @@ run: MC
         make -j4 -f jobs all
 */
 
+
+#include <execinfo.h> // backtrace_symbols_fd
+static void print_backtrace()
+{
+  //g_on_error_query("MC");
+  constexpr int size = 20;
+  void *buffer[size];
+  backtrace_symbols_fd(buffer, backtrace(buffer, size), STDOUT_FILENO);
+}
+
+static void single_handler(int sig)
+{
+  printf("Error: signal %d:\n", sig);
+  
+  print_backtrace();
+  
+  exit(1);
+}
+
+  // http://www.gnu.org/s/hello/manual/libc/Signal-Handling.html
+  signal( SIGSEGV, single_handler );
+  //signal( SIGABRT, single_handler );
+  

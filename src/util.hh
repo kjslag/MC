@@ -1,5 +1,6 @@
 // http://www.boost.org/doc/libs/1_46_0/doc/html/program_options.html
 #include <boost/program_options.hpp>
+#include <boost/math/constants/constants.hpp>
 
 //#include <glib.h>
 
@@ -23,8 +24,7 @@
 #include <cstdint>
 //#include <cassert>
 
-#include <execinfo.h> // backtrace_symbols_fd
-#include <unistd.h>   // getpid
+#include <unistd.h> // getpid
 
 using std::function;
 using std::string;
@@ -52,17 +52,21 @@ constexpr bool debug = false;
 
 // prints additional info on failed assertion
 // eg: Assert_(5 < x && x < y, x, y)
-#define Assert(x, ...) \
+#define Assert_F(x, F) \
   do { \
     if ( debug && unlikely(!(x)) ) { \
-      /*print_backtrace();*/ \
-      std::cerr << "\nAssertion false: " __FILE__ ":" << __LINE__ << " : '"#x"'" << std::endl \
-                << "{" #__VA_ARGS__ "} = " << std::make_tuple(__VA_ARGS__) << std::endl; \
+      std::cerr << "\nAssertion false: " __FILE__ ":" << __LINE__ << " : '" #x "'" << std::endl; \
+      F; \
       exit(1); \
     } \
   } while(false)
 
-#define FOR(i,n) for (typename std::remove_const<decltype(n)>::type i=0; i<n; ++i)
+#define Assert(x) Assert_F(x, )
+
+#define Assert_(x, ...) \
+        Assert_F(x, std::cerr << "{" #__VA_ARGS__ "} = " << std::make_tuple(__VA_ARGS__) << std::endl)
+
+#define FOR(i,n) for (typename std::decay<decltype(n)>::type i=0; i<n; ++i)
 #define _this (*this)
 
 #define COUNT_ARGS(...) COUNT_ARGS_(__VA_ARGS__,9,8,7,6,5,4,3,2,1,0)
@@ -72,14 +76,6 @@ typedef const char *String;
 
 template<typename T> T sq(T x) { return x*x; }
 template<uint n, typename T> T Pow(T x) { return (n>=2 ? Pow<n/2>(x*x) : 1)*(n%2 ? x : 1); }
-
-static void print_backtrace()
-{
-  //g_on_error_query("MC");
-  constexpr int size = 20;
-  void *buffer[size];
-  backtrace_symbols_fd(buffer, backtrace(buffer, size), STDOUT_FILENO);
-}
 
 template<typename T>
 ostream& operator<<(ostream &os, const vector<T> &v)
@@ -106,6 +102,9 @@ ostream& operator<<(ostream &os, const array<T,n> &a)
   return os << '}';
 }
 
+ostream& operator<<(ostream &os, const tuple<>&)
+{ return os << "{}"; }
+
 template<typename T, size_t i, size_t n>
 struct TupleStreamHelper {
   static void print(ostream &os, const T &t)
@@ -124,8 +123,7 @@ ostream& operator<<(ostream &os, const tuple<Ts...> &t)
   typedef tuple<Ts...> T;
   constexpr size_t n = std::tuple_size<T>::value;
   os << '{';
-  if (n)
-    TupleStreamHelper<T,0,n-1>::print(os, t);
+  TupleStreamHelper<T,0,n-1>::print(os, t);
   return os << '}';
 }
 
@@ -134,7 +132,7 @@ string stringify(const T &x)
 {
   std::ostringstream stream;
   if (!(stream << x))
-    Assert(false, x);
+    Assert_(false, x);
   return stream.str();
 }
 
@@ -144,7 +142,7 @@ void from_string(T &x, const string &str, const bool fail_if_leftover_characters
   std::istringstream stream(str);
   char c;
   if (!(stream >> x) || (fail_if_leftover_characters && stream.get(c)))
-    Assert(false, str);
+    Assert_(false, str);
 }
 
 template<class T>

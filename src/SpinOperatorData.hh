@@ -7,7 +7,7 @@ const Float sqrt3_4 = sqrt(.75);
 #define r sqrt1_2
 #define q sqrt3_4
 
-//SpinOperator_<2> signed_permutation_flipper_2({ OP(-s[0],s[1]), OP(-s[1],-s[0]), OP(s[1],s[0]), OP(s[0],-s[1]) });
+SpinOperator_<2> signed_permutation_flipper_2({ OP(-s[0],s[1]), OP(-s[1],-s[0]), OP(s[1],s[0]), OP(s[0],-s[1]) });
 
 SpinOperator_<3> signed_permutation_flipper_3({
 OP(-s[0],-s[1], s[2]), OP(-s[0],-s[2],-s[1]), OP(-s[0], s[2], s[1]),

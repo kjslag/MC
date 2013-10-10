@@ -7,6 +7,7 @@ long double debug_num = 0;
 
 //#define USE_RdRand
 
+#include "util.hh"
 
 // random
 
@@ -24,23 +25,36 @@ std::normal_distribution<Float>       normal_dist;
 
 // Value
 
-struct Accumulator
+struct Value
 {
-  Accumulator() : _n_samples(0) {}
-  
-  typedef function<void(LongFloat,uint)> Func;
-  
-  void set_func(const Func &f) { _f = f; }
+  Value() : _n_samples(0), _means_k(0) { _means.reserve(max_n_means); }
   
   void operator<<(LongFloat x)
   {
+    Assert_( _means_k == calc_means_k(), _means_k );
+    
     uint k = 0;
-    next_bin: {
-      if ( k < _sums.size() ) {
-        if (_f) _f(x, k);
+    next_bin:
+    {
+      if ( k == _means_k )
+      {
+        if ( _means.size() < max_n_means )
+          _means.push_back(x/exp2i(_means_k));
+        else {
+          FOR(i, max_n_means/2)
+            _means[i] = (_means[2*i] + _means[2*i+1])/2;
+          _means.resize(max_n_means/2);
+          Assert_( !full(k), k, n_samples() ); // else there would be double counting
+          ++_means_k;
+           // x will be added later
+        }
+      }
+      
+      if ( k < _sums.size() )
+      {
         Sum &sum = _sums[k];
-        const bool full = _n_samples & exp2i(k);
-        if ( !full )
+        sum.x2 += x*x;
+        if ( !full(k) )
           sum.x = x;
         else {
           x += sum.x;
@@ -51,75 +65,20 @@ struct Accumulator
       } else
         _sums.push_back(x);
     }
+    
+    ++_n_samples;
   }
-  
-  LongFloat operator[](uint k) const { return _sums[k].x; }
-  LongFloat      first(uint k) const { return _sums[k].first; }
   
   uint64_t n_samples() const { return _n_samples; }
-  uint size() const { return _sums.size(); }
-  
-  LongFloat total(uint k=0) const {
-    LongFloat tot=0;
-    const uint n = size();
-    for(; k<n; ++k)
-      tot += _sums[k].x;
-    return tot;
-  }
-  
-protected:
-  struct Sum {
-    Sum(LongFloat x_) : x(x_), first(x_) {}
-    
-    LongFloat x;
-    const LongFloat first;
-  };
-  typedef vector<Sum> Sums;
-  
-  friend ostream& operator<<(ostream &os, const Sum &sum);
-  friend ostream& operator<<(ostream &os, const Accumulator &acc);
-  
-private:
-  uint64_t _n_samples;
-  Sums     _sums;
-  Func     _f;
-};
-
-ostream& operator<<(ostream &os, const Accumulator::Sum &sum)
-{ return os << "sum[" << sum.x << ", " << sum.first << "]"; }
-
-ostream& operator<<(ostream &os, const Accumulator &acc)
-{ return os << "accumulator[" << acc._sums << "]"; } // todo fix [{}]
-
-struct Value
-{
-  Value() : _means_bin_num(0) {
-    _x_acc.set_func( [this](LongFloat x, uint k){this->x_acc_func(x, k);} );
-    _means.reserve(max_means);
-  }
-  
-  void operator<<(const LongFloat x)
-  {
-    Assert( _means_bin_num == calc_means_bin_num(),
-            max_means, n_samples(), _means_bin_num, calc_means_bin_num() );
-    
-    _x_acc << x;
-  }
-  
-  uint64_t n_samples() const { return _x_acc.n_samples(); }
-  
-  uint default_thermalization_exp() const
-  { return max(int(_x_acc.size()) - 6, 0); } // TODO
   
   LongFloat mean() const
   {
-    // TODO: calc from _binned_vec
-    const uint n_means = _means.size();
     LongFloat mean_ = 0;
-    if ( n_means >= 2 ) {
-      for (uint i=1; i<n_means; ++i)
-        mean_ += _means[i];
-      mean_ /= n_means - 1;
+    if ( _n_samples ) {
+      const uint n = _sums.size();
+      FOR(k, n)
+        mean_ += _sums[k].x;
+      mean_ /= _n_samples;
     } else
       mean_ = NAN;
     
@@ -128,88 +87,75 @@ struct Value
   
   const vector<LongFloat>& means() const { return _means; }
   
-  LongFloat error() const { return n_samples()>1 ? error(default_thermalization_exp()) : INFINITY; }
+  uint default_bin_size_exp() const { return _means_k; }
   
-  LongFloat error(uint bin_num) const
+  LongFloat error() const { return error(default_bin_size_exp()); }
+  
+  LongFloat error(uint k) const
   {
-    /*const LongFloat mean_ = mean(bin_num);
-    const LongFloat x2 = _binned_vec[bin_num].x2 - _binned_vec[bin_num].first_x2;
-    const uint64_t n_samples = error_bin_count(bin_num);
-    return sqrt(max(LongFloat(0), x2 - n_samples*bin_size(bin_num)*mean_*mean_)) / n_samples;*/
+    if ( k+1 >= _sums.size() )
+      return INFINITY;
+    
+    const LongFloat mean2         = sq(mean());
+    const uint64_t  n_x2_samples_ = n_x2_samples(k);
+    const LongFloat var           = _sums[k].x2 - n_x2_samples_*(exp2i(k)*mean2);
+    return sqrt(max(var, 2*mean2)) / n_x2_samples_;
+    // don't trust it, perhaps all spins are always up
   }
   
   vector<LongFloat> binned_errors() const
   {
     vector<LongFloat> errors_;
-    const int n_bins = _x2_binned_acc.size();
-    FOR(bin_num, n_bins-1)
-      errors_.push_back( error(bin_num) );
+    const int n_sums = _sums.size();
+    FOR(k, n_sums-1)
+      errors_.push_back( error(k) );
     return errors_;
   }
   
 protected:
-  typedef vector<Accumulator> BinnedAccumulators;
-  
-  friend ostream& operator<<(ostream &os, const BinnedAccumulators &binned_accs);
-  friend ostream& operator<<(ostream &os, const Value &value);
-  
-  void x_acc_func(LongFloat x, uint k)
-  {
-    if ( k == _means_bin_num ) {
-      if ( _means.size() < max_means )
-        _means.push_back(x/exp2i(_means_bin_num));
-      else {
-        FOR(i, max_means/2)
-          _means[i] = (_means[2*i] + _means[2*i+1])/2;
-        _means.resize(max_means/2);
-        //Assert( !full(k), k, n_samples() ); // else there would be double counting
-        ++_means_bin_num;
-         // x will be added later
-      }
-    }
+  struct Sum {
+    Sum(LongFloat x_) : x(x_), x2(x_*x_) {}
     
-    if ( k == _x2_binned_acc.size() )
-      _x2_binned_acc.emplace_back();
-    
-    _x2_binned_acc[k] << x*x;
-  }
+    LongFloat x;
+    LongFloat x2;
+  };
   
-  // number of samples per bin
-  static uint64_t bin_size(uint bin_num)
-  { return exp2i(bin_num); }
+  bool full(uint k) const { return _n_samples & exp2i(k); }
   
-  // number of samples that went into _binned_vec[bin_num].x2
-  uint64_t error_bin_count(uint bin_num) const
-  { return (n_samples() & ~(bin_size(bin_num)-1)) - bin_size(bin_num); }
+  friend ostream& operator<<(ostream &os, const Sum &sum);
   
-  uint calc_means_bin_num() const {
+  // number of samples that went into _sums[k].x2
+  uint64_t n_x2_samples(uint k) const
+  { return n_samples() & ~(exp2i(k)-1); }
+  
+  uint calc_means_k() const {
     uint n = 0;
-    while ( exp2i(n)*max_means < n_samples() )
+    while ( max_n_means < n_samples()/exp2i(n) )
       ++n;
     return n;
   }
   
 private:
-  Accumulator        _x_acc;
-  BinnedAccumulators _x2_binned_acc;
+  uint64_t           _n_samples;
+  vector<Sum>        _sums; // indexed by k, the bin size exponent
   vector<LongFloat>  _means;
-  uint               _means_bin_num;
+  uint               _means_k;
   
-  static const uint max_means;
+  static const uint max_n_means;
 };
-const uint Value::max_means = 1u<<4; // should be a power of 2 // TODO change to 1<<8
+const uint Value::max_n_means = 1u<<8;
 
-ostream& operator<<(ostream &os, const Value::BinnedAccumulators &binned_accs)
-{ return os << "binnedAccumulators[" << binned_accs << "]"; } // TODO: fix [{}]
+ostream& operator<<(ostream &os, const Value::Sum &sum)
+{ return os << "sum[" << sum.x << ", " << sum.x2 << "]"; }
 
 ostream& operator<<(ostream &os, const Value &value)
 {
-  return os << "value["                  << value.mean()
-            << ", "                      << value.error()
-            << ", \"means\" -> "         << value.means()
-            << ", \"binned errors\" -> " << value.binned_errors()
-            << ", \"# samples\" -> "     << value.n_samples()
-            << "]"; // TODO Accumulators
+  return os << "value["                    << value.mean()
+            <<   ", "                      << value.error()
+            <<   ", \"samples\" -> "       << value.n_samples()
+            << "\n, \"means\" -> "         << value.means()
+            << "\n, \"binned errors\" -> " << value.binned_errors()
+            << "]";
 }
 
 // MC
@@ -245,27 +191,34 @@ public:
   virtual const SpinFunc* potential() const =0;
   
   void set_update_method(const string method);
+  void set_thermalization(uint64_t thermalization) { _thermalization = thermalization; }
   
-  void sweep(const uint64_t nSweeps)
+  void sweep(uint64_t nSweeps)
   {
+    if ( _n_sweeps < _thermalization )
+      nSweeps += _thermalization - _n_sweeps;
+    
     FOR(sweepNum, nSweeps) {
       switch (_update_method) {
-        case UpdateMethod:: local:
+        case UpdateMethod::local:
           local_update();
           break;
         case UpdateMethod::global:
           if (n_>1) {
             global_update(false);
-            local_update (false);
+            if ( potential() )
+              local_update(false);
           }
           global_update(true);
           break;
         default:
-          Assert(false, _update_method);
+          Assert_(false, _update_method);
       }
       
-      if ( (sweepNum%100)==0 )
+      if ( (sweepNum%16)==0 )
         normalize_spins(); // to prevent roundoff error
+      
+      ++_n_sweeps;
     }
   }
   
@@ -285,7 +238,8 @@ protected:
       n_(n__),
      _update_method(UpdateMethod::global),
       index_dist(0, N_-1),
-     _nSweeps(0)
+     _thermalization(0),
+     _n_sweeps(0)
   { }
   
   virtual void set_potential_func(const SpinFunc *V) =0;
@@ -298,8 +252,9 @@ protected:
   std::uniform_int_distribution<Index> index_dist;
   
   string   _potential_name;
-  uint64_t _nSweeps;
-  vector<Float> _sum2, _sum2_2, _sum4;
+  uint64_t _thermalization, _n_sweeps;
+  Value    _sum_2, _sum_2_q1, _sum_2_q2, _sum_4, _sum_6, _sum_a4;
+  Value    _n_clusters, _n_measurement_clusters;
 };
 MC::~MC() {}
 
@@ -310,7 +265,7 @@ ostream& operator<<(ostream &os, MC::UpdateMethod method)
     case MC::UpdateMethod:: local: method_str =  "local"; break;
     case MC::UpdateMethod::global: method_str = "global"; break;
     default:
-      Assert(false, int(method));
+      Assert_(false, int(method));
   }
   return os << method_str;
 }
@@ -323,7 +278,7 @@ void MC::set_update_method(const string method_str)
       return;
     }
   
-  Assert(false, method_str);
+  Assert_(false, method_str);
 }
 
 // Spin
@@ -331,32 +286,31 @@ void MC::set_update_method(const string method_str)
 template<uint n, typename _float=Float>
 struct Spin_
 {
-  static struct Zero {} zero;
+  //enum Zero {zero};
 
   Spin_() = default;
-  Spin_(Zero) { FOR(k,n) _s[k] = 0; }
+  //Spin_(Zero) : _s{{}} {}
   Spin_(const Spin_ &s) = default;
   Spin_(const array<_float,n> &&s) : _s(s) {}
   
   template<typename _float_> explicit
   Spin_(const Spin_<n,_float_> &s)
-  { FOR(k,n) _s[k] = s[k]; }
+  { FOR(a,n) _s[a] = s[a]; }
   
-  _float& operator[](uint k)       { return _s[k]; }
-  _float  operator[](uint k) const { return _s[k]; }
+  _float& operator[](uint a)       { return _s[a]; }
+  _float  operator[](uint a) const { return _s[a]; }
   
   template<typename _float_>
-  void  operator+=(Spin_<n,_float_> s)       { FOR(k,n) _s[k] += s[k]; }
-  void  operator-=(Spin_            s)       { FOR(k,n) _s[k] -= s[k]; }
+  void  operator+=(Spin_<n,_float_> s)       { FOR(a,n) _s[a] += s[a]; }
+  void  operator-=(Spin_            s)       { FOR(a,n) _s[a] -= s[a]; }
   Spin_ operator+ (Spin_            s) const { s += _this; return s; }
-  Spin_ operator- (Spin_            s) const { Spin_ ret; FOR(k,n) ret[k] =  _this[k] - s[k]; return ret; }
-  Spin_ operator- (                  ) const { Spin_ ret; FOR(k,n) ret[k] = -_this[k]       ; return ret; }
+  Spin_ operator- (Spin_            s) const { Spin_ ret; FOR(a,n) ret[a] =  _this[a] - s[a]; return ret; }
+  Spin_ operator- (                  ) const { Spin_ ret; FOR(a,n) ret[a] = -_this[a]       ; return ret; }
   
-  void  operator*=(_float x)       { FOR(k,n) _s[k] *= x; }
+  void  operator*=(_float x)       { FOR(a,n) _s[a] *= x; }
   void  operator/=(_float x)       { _this *= 1/x; }
-  Spin_ operator* (_float x) const { Spin_ s = _this; s *= x; return s; }
   
-  _float operator|(Spin_ s) const { _float x=0; FOR(k,n) x += _s[k]*s[k]; return x; } // dot product
+  _float operator|(Spin_ s) const { _float x=0; FOR(a,n) x += _s[a]*s[a]; return x; } // dot product
   
   void normalize() { _this /= sqrt(_this|_this); }
   
@@ -365,15 +319,25 @@ struct Spin_
     Spin_ s;
     Float norm;
     do {
-      FOR(k,n) s[k] = normal_dist(random_engine);
+      FOR(a,n) s[a] = normal_dist(random_engine);
       norm = s|s;
     } while (norm < .01);
     s /= sqrt(norm);
     return s;
   }
   
+private:
+  template<uint n_, typename _float_>
+  friend ostream& operator<<(ostream &os, const Spin_<n_,_float_> &s);
+  
   array<_float,n> _s;
 };
+
+template<uint n, typename _float>
+Spin_<n,_float> operator*(_float x, Spin_<n,_float> s) { s *= x; return s; }
+
+template<uint n, typename _float>
+_float sq(Spin_<n,_float> s) { return s|s; }
 
 template<uint n, typename _float>
 ostream& operator<<(ostream &os, const Spin_<n,_float> &s)
@@ -404,7 +368,7 @@ struct InvertSpin_ : public SpinFlipper_<n> {
   typedef Spin_<n> Spin;
   
   virtual void  reset() final { r = Spin::random(); }
-  virtual void  flip(Spin &s) const final { s += r*(-2*(s|r)); }
+  virtual void  flip(Spin &s) const final { s += (-2*(s|r)) * r; }
   
   Spin r;
 };
@@ -432,6 +396,51 @@ private:
 
 #include "SpinOperatorData.hh"
 
+// SpinMatrix
+
+template<uint n>
+using SpinMatrix_ = array<Spin_<n>,n>;
+
+template<uint n>
+Spin_<n> operator|(const SpinMatrix_<n> &M, const Spin_<n> s0) {
+  Spin_<n> s = s0;
+  FOR(a,n) s[a] = M[a] | s0;
+  return s;
+}
+
+template<uint n>
+SpinMatrix_<n> operator|(const SpinMatrix_<n> &M1, const SpinMatrix_<n> &M2)
+{
+  SpinMatrix_<n> M;
+  
+  FOR(a,n)
+  FOR(b,n) {
+    LongFloat m = 0;
+    FOR(c,n)
+      m += M1[a][c] * M2[c][b];
+    M[a][b] = m;
+  }
+  
+  return M;
+}
+
+template<uint n>
+LongFloat tr(const SpinMatrix_<n> &M) {
+  LongFloat x = 0;
+  FOR(a,n)
+    x += M[a][a];
+  return x;
+}
+
+template<uint n>
+LongFloat tr(const SpinMatrix_<n> &M1, const SpinMatrix_<n> &M2) {
+  LongFloat x = 0;
+  FOR(a,n)
+  FOR(b,n)
+    x += M1[a][b] * M2[b][a];
+  return x;
+}
+
 // SpinFunc
 
 struct SpinFunc {
@@ -449,7 +458,7 @@ struct SpinFunc_ : public SpinFunc {
 template<uint n>
 struct s4_Potential_ : public SpinFunc_<n> {
   s4_Potential_(Float u_) : u(u_) {}
-  virtual Float operator()(Spin_<n> s) const final { Float V=0; FOR(k,n) V += Pow<4>(s[k]); return u*V; }
+  virtual Float operator()(Spin_<n> s) const final { Float V=0; FOR(a,n) V += Pow<4>(s[a]); return u*V; }
   virtual vector<Float> coefficients() const { return {u}; }
   const Float u;
 };
@@ -460,7 +469,7 @@ unique_ptr<SpinFunc> make_s4_Potential(Float u, uint n)
   if      (n==2) potential = new s4_Potential_<2>(u);
   else if (n==3) potential = new s4_Potential_<3>(u);
   
-  Assert(potential, n);
+  Assert_(potential, n);
   return unique_ptr<SpinFunc>(potential);
 }
 
@@ -481,7 +490,7 @@ unique_ptr<SpinFunc> make_cos_Potential(Float u, uint m)
   else if (m==6) potential = new cos_Potential_<6>(u);
   else if (m==8) potential = new cos_Potential_<8>(u);
 
-  Assert(potential, m);
+  Assert_(potential, m);
   return unique_ptr<SpinFunc>(potential);
 }
 
@@ -492,7 +501,7 @@ struct VisonSquare_sVBS_Potential : public SpinFunc_<4>
   VisonSquare_sVBS_Potential(Float u_, Float v_) : u(u_), v(v_) {}
   
   virtual Float operator()(Spin s) const final {
-    FOR(k,4) s[k] = s[k]*s[k];
+    FOR(a,4) s[a] = s[a]*s[a];
     return   u*(s[0] + s[1] + s[2] + s[3])
            + v*(s[0] + s[1])*(s[2] + s[3]);
   }
@@ -510,7 +519,7 @@ struct VisonTrianglePotential : public SpinFunc_<6>
   
   virtual Float operator()(Spin s) const final {
     Spin s2;
-    FOR(k,6) s2[k] = s[k]*s[k];
+    FOR(a,6) s2[a] = s[a]*s[a];
     return   u*(sq(s2[0]+s2[1])     +     sq(s2[2]+s2[3])     +     sq(s2[4]+s2[5]))
          + 2*v*(  (s2[0]-s2[1])*s[2]*s[3] + (s2[2]-s2[3])*s[4]*s[5] + (s2[4]-s2[5])*s[0]*s[1]);
   }
@@ -531,13 +540,14 @@ public:
   typedef Spin_<n,LongFloat> SpinSum;
   typedef array<Index,2*dim> NearestNeighbors;
   
+  // POD is zero initialized by {}
   static_assert( std::is_pod<Spin>::value, "Spin isn't POD" );
   
   // lattice
   
   typedef array<uint,dim> Pos;
   
-  Index index(const Pos p) const // todo: try blocking
+  Index index(const Pos p) const // todo: consider blocking
   {
     Index i = p[0];
     for (uint d=1; d<dim; ++d)
@@ -545,7 +555,7 @@ public:
     return i;
   }
   
-  Pos pos(Index i) const // todo: try blocking
+  Pos pos(Index i) const // todo: consider blocking
   {
     Pos p;
     for (uint d=dim-1; d>0; --d) {
@@ -578,7 +588,7 @@ public:
   
   virtual void clear_spins() final {
     Spin s;
-    FOR(k,n) s[k] = (k==0);
+    FOR(a,n) s[a] = (a==0);
     FOR(i,N) _spins[i] = s;
   }
   
@@ -590,7 +600,8 @@ public:
   
   virtual void local_update(bool measure_=true) final __attribute__((hot))
   {
-    for (Size count=0; count<N; ++count) { // warning: do NOT count how many spins are updated
+    const Size n_updaes = 1+index_dist(random_engine);
+    for (Size count=0; count<n_updaes; ++count) { // warning: do NOT count how many spins are updated
       const Index i = index_dist(random_engine);
       
       const Spin s1 = _spins[i];
@@ -600,7 +611,7 @@ public:
       if (_V)
         delta_E += V(s2) - V(s1);
       
-      Spin sum_nn(Spin::zero);
+      Spin sum_nn{};
       for(Index nn : nearestNeighbors(i))
         sum_nn += _spins[nn];
       delta_E += -J*((s2-s1)|sum_nn);
@@ -609,10 +620,8 @@ public:
         _spins[i] = s2;
     }
     
-    if (measure_)
+    if ( measure_ )
       measure();
-    
-    ++_nSweeps;
   }
   
   virtual void global_update(bool measure_) final __attribute__((hot))
@@ -623,7 +632,7 @@ public:
         _flipper->reset();
         const Spin s = Spin::random();
         const Float delta_V = V(s) - V(_flipper->flipped(s,i<3));
-        Assert( is_small(delta_V), s, delta_V );
+        Assert_( is_small(delta_V), s, delta_V );
       }
       _check_flipper = false;
     }
@@ -638,10 +647,26 @@ public:
       const bool flipCluster = bool_dist(random_engine);
       Index *newIndex = _newIndexStack.get();
       
+      #define sum_cluster_q(op, i) do{ \
+        _clusterSums[nClusters] op (s); \
+        const Pos p = pos(i); \
+        FOR(d, dim) \
+        if ( L[d] == L[0] ) { \
+          const uint x1 =    p[d]; \
+          const uint x2 = (2*p[d])%L[0]; \
+          _clusterSums_q[d][nClusters][0] op (_cos[x1] * s); \
+          _clusterSums_q[d][nClusters][1] op (_sin[x1] * s); \
+          _clusterSums_q[d][nClusters][2] op (_cos[x2] * s); \
+          _clusterSums_q[d][nClusters][3] op (_sin[x2] * s); \
+        } \
+      } while(0)
+      
       *newIndex = i0;
       _cluster[i0] = true;
-      if ( measure_ )
-        _clusterSums[nClusters] = SpinSum(_spins[i0]);
+      if ( measure_ ) {
+        const Spin s = _spins[i0];
+        sum_cluster_q(=SpinSum, i0);
+      }
       if ( flipCluster )
         _flipper->flip(_spins[i0], measure_);
       
@@ -657,7 +682,7 @@ public:
               *(++newIndex) = i;
               _cluster[i] = true;
               if ( measure_ )
-                _clusterSums[nClusters] += s;
+                sum_cluster_q(+=, i);
               if ( flipCluster )
                 _spins[i] = flipped_s;
             }
@@ -667,26 +692,68 @@ public:
       ++nClusters;
     }
     
-    if ( measure_ ) {
-      if (true) {
-        LongFloat Y2=0, Y4=0;
-        FOR(c, nClusters) {
-          const SpinSum y  = _clusterSums[c];
-          const Float   y2 = y|y;
-          Y2 += y2;
-          Y4 += y2*y2;
-        }
-        const LongFloat
-          Z2 = Y2,
-          Z4 = 3*sq(Y2) - 2*Y4;
+    if ( _n_sweeps >= _thermalization ) {
+      if ( measure_ )
+      {
+        typedef SpinMatrix_<n> SpinMatrix;
+        static_assert( std::is_pod<SpinMatrix>::value, "SpinMatrix isn't POD" );
         
-        _sum2  .push_back(( Z2 )/sq(LongFloat(N)));
-        _sum2_2.push_back(( Z4 )/Pow<4>(LongFloat(N)));
-        // TODO sum4
-      } else
-        measure();
+        LongFloat  S6=0, S4_1=0;
+        SpinSum    Q2{};
+        SpinMatrix M2{}, M4{};
+        LongFloat  sum_2_q1=0, sum_2_q2=0;
+        FOR(c, nClusters)
+        {
+          const SpinSum   s  = _clusterSums[c];
+          const LongFloat s2 = s|s;
+          
+          S6 += Pow<3>(s2);
+          FOR(a, n) {
+            if ( n > 1 ) {
+              S4_1  += Pow<4>(s[a]);
+              Q2[a] += Pow<2>(s[a]);
+            }
+            FOR(b, n) {
+              M2[a][b] +=      s[a]*s[b];
+              M4[a][b] += s2 * s[a]*s[b];
+            }
+          }
+          
+          FOR(d, dim)
+          if ( L[d] == L[0] )
+          FOR(cs, 2) {
+            sum_2_q1 += sq(_clusterSums_q[d][c][0+cs]);
+            sum_2_q2 += sq(_clusterSums_q[d][c][2+cs]);
+          }
+        }
+        const SpinMatrix M2_2 = M2|M2;
+        
+        uint n_q_dim = 0;
+        FOR(d, dim)
+          if ( L[d] == L[0] )
+            ++n_q_dim;
+        
+        const LongFloat
+          N2      = sq(LongFloat(N)),
+          N4      = sq(N2),
+          N6      = N2*N4,
+          S2      = tr(M2),
+          S4      = tr(M4),
+          S_2_2   = tr(M2_2),
+          S_2_2_2 = tr(M2_2, M2),
+          S_4_2   = tr(M4, M2),
+          Q2_2    = Q2|Q2;
+        
+        _sum_2    << ( S2 )/N2;
+        _sum_2_q1 << ( sum_2_q1 )/(n_q_dim*N2);
+        _sum_2_q2 << ( sum_2_q2 )/(n_q_dim*N2);
+        _sum_4    << ( sq(S2) - 2*S4 + 2*S_2_2 )/N4;
+        _sum_6    << ( Pow<3>(S2) - 6*S2*S4 + 16*S6 + 6*S2*S_2_2 - 24*S_4_2 + 8*S_2_2_2 )/N6;
+        if (n > 1)
+          _sum_a4 << ( 3*Q2_2 - 2*S4_1 )/N4;
+      }
       
-      ++_nSweeps;
+      (measure_ ? _n_measurement_clusters : _n_clusters) << nClusters;
     }
   }
   
@@ -694,7 +761,7 @@ public:
   {
     if (flipper) {
       _flipper = dynamic_cast<SpinFlipper_<n>*>(flipper);
-      Assert(_flipper, n);
+      Assert_(_flipper, n);
     }
     else
       _flipper = n>1 ? &_invert_spin : dynamic_cast<SpinFlipper_<n>*>(n==1 ? &ising_flipper : nullptr);
@@ -710,18 +777,52 @@ public:
 protected:
   void measure()
   {
-    SpinSum sum(SpinSum::zero);
-    FOR(i, N)
-      sum += _spins[i];
-    sum /= N;
-    const LongFloat sum2 = sum|sum;
-    LongFloat sum4  = 0;
-    FOR(k,n)  sum4 += Pow<4>(sum[k]);
-    
-    _sum2  .push_back(sum2);
-    _sum2_2.push_back(sum2*sum2);
-    if (n > 1)
-      _sum4.push_back(sum4);
+    if ( _n_sweeps >= _thermalization ) {
+      SpinSum sum{}, sum_q1[dim][2]{}, sum_q2[dim][2]{};
+      FOR(i, N) {
+        const Spin s = _spins[i];
+        sum += s;
+        const Pos p = pos(i);
+        
+        FOR(d, dim)
+        if ( L[d] == L[0] ) {
+          const uint x1=   p[d];
+          const uint x2=(2*p[d])%L[0];
+          sum_q1[d][0] += _cos[x1] * s;
+          sum_q1[d][1] += _sin[x1] * s;
+          sum_q2[d][0] += _cos[x2] * s;
+          sum_q2[d][1] += _sin[x2] * s;
+        }
+      }
+      sum /= N;
+      const LongFloat
+        N2 = sq(LongFloat(N)),
+        sum_2 = sum|sum;
+      
+      uint n_q_dim = 0;
+      LongFloat sum_2_q1=0, sum_2_q2=0;
+      FOR(d, dim)
+        if ( L[d] == L[0] ) {
+          ++n_q_dim;
+          FOR(cs, 2) {
+            sum_2_q1 += sq(sum_q1[d][cs]);
+            sum_2_q2 += sq(sum_q2[d][cs]);
+          }
+        }
+      sum_2_q1 /= n_q_dim*N2;
+      sum_2_q2 /= n_q_dim*N2;
+      
+      LongFloat sum_a4  = 0;
+      FOR(a,n)  sum_a4 += Pow<4>(sum[a]);
+      
+      _sum_2    <<        sum_2;
+      _sum_2_q1 <<        sum_2_q1;
+      _sum_2_q2 <<        sum_2_q2;
+      _sum_4    << Pow<2>(sum_2);
+      _sum_6    << Pow<3>(sum_2);
+      if (n > 1)
+        _sum_a4 << sum_a4;
+    }
   }
   
   MC_(const array<uint,dim> &L__, const vector<uint> &L_v, Size N_)
@@ -730,10 +831,24 @@ protected:
      _spins(new Spin[N_]),
      _newIndexStack(new Index[N_]),
      _clusterSums(new SpinSum[N_]),
+     _cos(new Float[L[0]]),
+     _sin(new Float[L[0]]),
      _flipper(nullptr),
      _V(nullptr),
      _check_flipper(false)
-  { set_flipper(nullptr); }
+  {
+    set_flipper(nullptr);
+    
+    FOR(d, dim)
+    if ( L[d] == L[0] )
+      _clusterSums_q[d].reset(new array<SpinSum,4>[N_]);
+    
+    const Float pi = boost::math::constants::pi<Float>();
+    FOR(x, L[0]) {
+      _cos[x] = cos((2*pi*x)/L[0]);
+      _sin[x] = sin((2*pi*x)/L[0]);
+    }
+  }
   
   virtual void set_potential_func(const SpinFunc *new_V) final
   {
@@ -741,7 +856,7 @@ protected:
     
     if (new_V) {
       _check_flipper = true;
-      Assert(_V, n);
+      Assert_(_V, n);
     }
   }
   
@@ -752,14 +867,16 @@ protected:
   const array<uint,dim> L; // lengths
   
 private:
-  const unique_ptr<Spin[]>     _spins;
-  vector<bool>                 _cluster;
-  const unique_ptr<Index[]>    _newIndexStack;
-  const unique_ptr<SpinSum[]>  _clusterSums;
+  const unique_ptr<Spin[]>       _spins;
+  vector<bool>                   _cluster;
+  const unique_ptr<Index[]>      _newIndexStack;
+  const unique_ptr<SpinSum[]>    _clusterSums;
+  unique_ptr<array<SpinSum,4>[]> _clusterSums_q[dim]; // 4 = #(q1, q2) * #(cos, sin)
+  unique_ptr<Float[]>            _cos, _sin;
   
-  InvertSpin_<n>               _invert_spin;
-  SpinFlipper_<n>             *_flipper;
-  const SpinFunc_<n>          *_V;
+  InvertSpin_<n>      _invert_spin;
+  SpinFlipper_<n>    *_flipper;
+  const SpinFunc_<n> *_V;
   
   bool _check_flipper;
 };
@@ -773,16 +890,24 @@ ostream& operator<<(ostream &os, const MC &mc)
     J.insert(J.end(), coefficients.begin(), coefficients.end());
   }
   
+  const uint64_t sweeps = mc._n_sweeps - min(mc._thermalization, mc._n_sweeps);
+  
   os << "{\n"
         "\"L\" -> " << mc.L_ << ",\n"
         "\"n\" -> " << mc.n_ << ",\n"
         "\"J\" -> " <<    J  << ",\n"
-        "\"potential\" -> \""     << mc._potential_name << "\",\n"
-        "\"update method\" -> \"" << mc._update_method << "\",\n"
-         "\"sweeps\" -> "         << mc._nSweeps << ",\n"
-            "\"s^2\" -> value@"   << mc._sum2    << ",\n"
-        "\"(s^2)^2\" -> value@"   << mc._sum2_2  << ",\n"
-            "\"s^4\" -> value@"   << mc._sum4    << "\n";
+        "\"potential"         "\" -> \"" << mc._potential_name         << "\",\n"
+        "\"update method"     "\" -> \"" << mc._update_method          << "\",\n"
+        "\"sweeps"            "\" -> "   <<     sweeps                 <<   ",\n"
+        "\"thermalization"    "\" -> "   << mc._thermalization         <<   ",\n"
+        "\"S^2"               "\" -> "   << mc._sum_2                  <<   ",\n"
+        "\"S^2_q1"            "\" -> "   << mc._sum_2_q1               <<   ",\n"
+        "\"S^2_q2"            "\" -> "   << mc._sum_2_q2               <<   ",\n"
+        "\"S^4"               "\" -> "   << mc._sum_4                  <<   ",\n"
+        "\"S^6"               "\" -> "   << mc._sum_6                  <<   ",\n"
+        "\"Sa^4"              "\" -> "   << mc._sum_a4                 <<   ",\n"
+        "\"clusters"          "\" -> "   << mc._n_clusters             <<   ",\n"
+        "\"measurement clusters\" -> "   << mc._n_measurement_clusters <<    "\n";
   return os << "}\n";
 }
 
@@ -793,7 +918,7 @@ unique_ptr<MC> MC::make(const vector<uint> &L, uint n_fields)
   FOR(d,dim) {
     const MC::Size old_N = N;
     N *= L[d];
-    Assert( L[d] && N/L[d] == old_N, old_N, L[d], N ); // check overflow
+    Assert_( L[d] && N/L[d] == old_N, old_N, L[d], N ); // check overflow
   }
   
   MC *mc = nullptr;
@@ -806,12 +931,14 @@ unique_ptr<MC> MC::make(const vector<uint> &L, uint n_fields)
   }
   
   if (false) {}
-//ELSE_TRY_MC(1,1)
-//ELSE_TRY_MC(1,2)
+  ELSE_TRY_MC(1,1)
+  ELSE_TRY_MC(1,2)
+  ELSE_TRY_MC(1,3)
+  ELSE_TRY_MC(1,6)
   ELSE_TRY_MC(2,1)
   ELSE_TRY_MC(2,2)
   ELSE_TRY_MC(2,3)
-//ELSE_TRY_MC(3,1)
+  ELSE_TRY_MC(3,1)
   ELSE_TRY_MC(3,2)
   ELSE_TRY_MC(3,3)
   ELSE_TRY_MC(3,4)
@@ -820,7 +947,7 @@ unique_ptr<MC> MC::make(const vector<uint> &L, uint n_fields)
 //ELSE_TRY_MC(4,2)
 //ELSE_TRY_MC(4,3)
   else
-    Assert(false, L, N);
+    Assert_(false, L, N);
   
   #undef ELSE_TRY_MC
   
@@ -829,56 +956,40 @@ unique_ptr<MC> MC::make(const vector<uint> &L, uint n_fields)
 
 // main
 
-static void single_handler(int sig)
-{
-  printf("Error: signal %d:\n", sig);
-  
-  print_backtrace();
-  
-  exit(1);
-}
-
 int main(const int argc, char *argv[])
 {
   using std::cout;
   using std::cerr;
   using std::endl;
   
-  Value v;
-  FOR(i,200) {
-    cout << v << endl;
-    v << 1;
-  }
-  
-  return 0;
-  
-  // http://www.gnu.org/s/hello/manual/libc/Signal-Handling.html
-  signal( SIGSEGV, single_handler );
-  //signal( SIGABRT, single_handler );
-  
   // read program options
   namespace po = boost::program_options;
   
   po::options_description generic_options("generic options");
   generic_options.add_options()
-      ("help,h",                               "print help message")
-      ("verbose,v",                            "print verbose output");
+      ("help,h",  "print help message")
+      ("verbose", "print verbose output");
   
+  vector<uint> L;
   uint n = 0;
   vector<Float> J;
   string potential_name;
   po::options_description system_options("physics options");
   system_options.add_options()
-      ("L",         po::value<vector<uint>>()->multitoken(),     "lengths")
+      ("L",         po::value<vector<uint>>(&L)->multitoken(),   "lengths")
       ("n",         po::value<uint>(&n),                         "for an O(n) model")
       ("J",         po::value<vector<Float>>(&J)->multitoken(),  "spin coupling and other potential coefficients")
       ("potential", po::value<string>(&potential_name),          "potential term: s^4; cos#; vison hexagon|square|triangle c|s-VBS");
   
+  uint64_t n_sweeps = 0;
+  uint64_t thermalization = 0;
+  string file_name, update_method;
   po::options_description simulation_options("simulation options");
   simulation_options.add_options()
-      ("sweeps",                 po::value<uint64_t>()->default_value(1),      "# of MC sweeps")
-      ("file",                   po::value<string>(),                          "save file")
-      ("update-method",          po::value<string>()->default_value("global"), "update type: local or global");
+      ("sweeps",         po::value<uint64_t>(&n_sweeps),                             "# of MC sweeps (rounded to a power of 2)")
+      ("thermalization", po::value<uint64_t>(&thermalization),                       "# of thermalization sweeps (defaults to #sweeps/4)")
+      ("file",           po::value<string>(&file_name),                              "save file (or into directory/)")
+      ("update-method",  po::value<string>(&update_method)->default_value("global"), "update type: local or global");
   
   po::options_description cmdline_options;
   cmdline_options.add(generic_options)
@@ -897,18 +1008,23 @@ int main(const int argc, char *argv[])
     return 0;
   }
   
-  if ( !vm.count("L") ) {
+  if ( !L.size() ) {
     cerr << "L is required" << endl;
     return 1;
   }
   
-  unique_ptr<SpinFunc>   potential;
+  Assert(n_sweeps);
+  n_sweeps = exp2i(uint(log2(n_sweeps) + .5));
+  if ( !vm.count("thermalization") )
+    thermalization = n_sweeps/4;
+  
+  unique_ptr<SpinFunc>  potential;
   SpinFlipper          *spin_flipper = nullptr;
-  if ( !potential_name.empty() )
+  if ( vm.count("potential") )
   {
     auto check_n = [&n](const uint new_n) {
       if (n==0) n=new_n;
-      else      Assert(n==new_n, n, new_n); };
+      else      Assert_(n==new_n, n, new_n); };
     
     string V_str = potential_name;
     
@@ -917,45 +1033,45 @@ int main(const int argc, char *argv[])
     } else if ( V_str == "vison hexagon s-VBS" ) {
       check_n(3);
       V_str = "s^4";
-    } else if ( V_str == "vison square c-VBS" ) {
+    } else if ( V_str == "vison square c-VBS"  ) {
       V_str = "cos8";
     }
     
     if ( V_str == "s^4" ) {
-      Assert(J.size() == 1+1, J);
+      Assert_(J.size() == 1+1, J);
       potential = make_s4_Potential(J[1], n);
-      if      (n==2) Assert(false, n); //spin_flipper = &signed_permutation_flipper_2;
+      if      (n==2) spin_flipper = &signed_permutation_flipper_2;
       else if (n==3) spin_flipper = &signed_permutation_flipper_3;
       else if (n==4) spin_flipper = &signed_permutation_flipper_4;
-      else           Assert(false, n);
+      else           Assert_(false, n);
     } else if ( V_str.substr(0,3) == "cos" ) {
       check_n(2);
-      Assert(J.size() == 1+1, J);
+      Assert_(J.size() == 1+1, J);
       const uint m = from_string<uint>(V_str.substr(3));
       potential = make_s4_Potential(J[1], m);
       if      (m==2) spin_flipper = &cos2_flipper;
       else if (m==4) spin_flipper = &cos4_flipper;
       else if (m==6) spin_flipper = &cos6_flipper;
       else if (m==8) spin_flipper = &cos8_flipper;
-      else           Assert(false, m);
+      else           Assert_(false, m);
     } else if ( V_str == "vison square s-VBS" ) {
       check_n(4);
-      Assert(J.size() == 1+2, J);
+      Assert_(J.size() == 1+2, J);
       potential.reset(new VisonSquare_sVBS_Potential(J[1], J[2]));
-      Assert(false, V_str);
+      Assert_(false, V_str);
     } else if ( V_str == "vison triangle c-VBS" ) {
       check_n(6);
-      Assert(J.size() == 1+2, J);
+      Assert_(J.size() == 1+2, J);
       potential.reset(new VisonTrianglePotential(J[1], J[2]));
       spin_flipper = &vison_triangle_flipper;
     } else
-      Assert(false, V_str);
+      Assert_(false, V_str);
   }
   else
-    Assert(J.size() == 1, J);
+    Assert(J.size() == 1);
   
-  Assert(n, n);
-  unique_ptr<MC> mc = MC::make(vm["L"].as<vector<uint>>(), n);
+  Assert(n);
+  unique_ptr<MC> mc = MC::make(L, n);
   
   #ifndef USE_RdRand
   random_seed = std::chrono::system_clock::now().time_since_epoch().count() * getpid();
@@ -963,18 +1079,25 @@ int main(const int argc, char *argv[])
   #endif
   
   mc->clear_spins();
-  Assert(J.size(), J);
+  Assert(J.size());
   mc->J = J[0];
-  mc->set_update_method( vm["update-method"].as<string>() );
+  mc->set_update_method(update_method);
   mc->set_potential(potential.get(), potential_name);
   mc->set_flipper(spin_flipper);
+  mc->set_thermalization(thermalization);
   
-  mc->sweep( vm["sweeps"].as<uint64_t>() );
+  mc->sweep(n_sweeps);
   
   if ( vm.count("file") ) {
-    std::ofstream file( vm["file"].as<string>() );
+    if ( file_name.back() == '/' ) {
+      std::ostringstream ss;
+      ss << file_name << " n=" << n << " L=" << L << " J=" << J << " updates=" << update_method;
+      file_name = ss.str();
+    }
+    std::ofstream file(file_name);
     file << *mc;
-  }
+  } else
+    cout << *mc << endl;
   
   if ( debug_num )
     cout << debug_num << endl;
