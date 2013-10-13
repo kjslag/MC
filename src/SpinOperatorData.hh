@@ -9,12 +9,16 @@ const Float sqrt3_4 = sqrt(.75);
 
 SpinOperator_<2> signed_permutation_flipper_2({ OP(-s[0],s[1]), OP(-s[1],-s[0]), OP(s[1],s[0]), OP(s[0],-s[1]) });
 
-SpinOperator_<3> signed_permutation_flipper_3({
+/*SpinOperator_<3> signed_permutation_flipper_3({
 OP(-s[0],-s[1], s[2]), OP(-s[0],-s[2],-s[1]), OP(-s[0], s[2], s[1]),
 OP(-s[0], s[1],-s[2]), OP(-s[0], s[1], s[2]), OP(-s[1],-s[0],-s[2]), OP(-s[1],-s[0], s[2]),
 OP(-s[2],-s[1],-s[0]), OP(-s[2], s[1],-s[0]), OP( s[2],-s[1], s[0]), OP( s[2], s[1], s[0]),
 OP( s[1], s[0],-s[2]), OP( s[1], s[0], s[2]), OP( s[0],-s[1],-s[2]), OP( s[0],-s[1], s[2]),
-OP( s[0],-s[2],-s[1]), OP( s[0], s[2], s[1]), OP( s[0], s[1],-s[2]) });
+OP( s[0],-s[2],-s[1]), OP( s[0], s[2], s[1]), OP( s[0], s[1],-s[2]) });*/
+
+SpinOperator_<3> signed_permutation_flipper_3({OP(-s[0],s[1],s[2]), OP(-s[1],-s[0],s[2]), OP(-s[2],s[1],-s[0]), 
+OP(s[2],s[1],s[0]), OP(s[1],s[0],s[2]), OP(s[0],-s[1],s[2]), 
+OP(s[0],-s[2],-s[1]), OP(s[0],s[2],s[1]), OP(s[0],s[1],-s[2])});
 
 SpinOperator_<4> signed_permutation_flipper_4({
 OP(-s[0],-s[1],-s[2], s[3]), OP(-s[0],-s[1],-s[3],-s[2]), OP(-s[0],-s[1], s[3], s[2]),
