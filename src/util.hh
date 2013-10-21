@@ -159,6 +159,59 @@ uint64_t exp2i(uint x) { return uint64_t(1)<<x; }
 template<typename T>
 bool is_small(T x) { return abs(x) < sqrt(std::numeric_limits<T>::epsilon()); }
 
+template<typename T>
+constexpr T infinity() { return std::numeric_limits<T>::infinity() }
+
+template<typename F>
+struct IO_float {
+  IO_float() = default;
+  IO_float(Float x) : f(x) {};
+  
+  F f;
+};
+
+template<typename F>
+istream& operator>>(istream &is, IO_float<F> &f)
+{
+  F x;
+  if (is >> x)
+  {
+    if ( is.peek() == '/' ) {
+      char c;
+      F y;
+      if (is >> c >> y)
+        f = x/y;
+    }
+    else if ( !is.bad() ) {
+      is.clear();
+      f = x;
+    }
+  }
+  return is;
+}
+
+template<typename F>
+ostream& operator<<(ostream &os, const IO_float<F> f)
+{
+  if ( llround(f.f) != f.f ) {
+    uint den = 1u<<25;
+    F    num = f.f * den;
+    
+    if ( llround(num) == num ) {
+      do {
+        num /= 2;
+        den /= 2;
+      } while ( llround(num)==num && den );
+      num *= 2;
+      den *= 2;
+      Assert(den);
+      return os << llround(num) << '/' << den;
+    }
+  }
+  
+  return os << f.f;
+}
+
 #ifdef USE_RdRand
 class RdRand
 {

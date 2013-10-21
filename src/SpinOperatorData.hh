@@ -25,6 +25,7 @@ OP( s[0], s[1],-s[2], s[3]), OP( s[0], s[1],-s[3],-s[2]),
 OP( s[0], s[1], s[3], s[2]), OP( s[0], s[1], s[2],-s[3]) });
 
 SpinOperator_<2> cos2_flipper({ OP(-s[0],s[1]), OP( s[0],-s[1]) });
+SpinOperator_<2> cos3_flipper({ OP(s[0],-s[1]), OP(-s[0]/2-q*s[1],-q*s[0]+s[1]/2), OP(-s[0]/2+q*s[1],q*s[0]+s[1]/2) }, false);
 SpinOperator_<2> cos4_flipper({ OP(-s[0],s[1]), OP(-s[1],-s[0]), OP(s[1],s[0]), OP(s[0],-s[1]) });
 
 SpinOperator_<2> cos6_flipper({
