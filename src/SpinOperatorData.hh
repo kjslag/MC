@@ -1,3 +1,5 @@
+// developer: Kevin Slagle (kslagle@physics.ucsb.edu)
+// date: 2013
 
 SpinOperator_<1> ising_flipper({ [](Spin_<1> &s){s = -s;} });
 

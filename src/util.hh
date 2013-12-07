@@ -1,3 +1,6 @@
+// developer: Kevin Slagle (kslagle@physics.ucsb.edu)
+// date: 2013
+
 // http://www.boost.org/doc/libs/1_46_0/doc/html/program_options.html
 #include <boost/program_options.hpp>
 #include <boost/math/constants/constants.hpp>
@@ -160,7 +163,7 @@ template<typename T>
 bool is_small(T x) { return abs(x) < sqrt(std::numeric_limits<T>::epsilon()); }
 
 template<typename T>
-constexpr T infinity() { return std::numeric_limits<T>::infinity() }
+constexpr T infinity() { return std::numeric_limits<T>::infinity(); }
 
 template<typename F>
 struct IO_float {

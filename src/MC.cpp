@@ -1,3 +1,6 @@
+// developer: Kevin Slagle (kslagle@physics.ucsb.edu)
+// date: 2013
+
 typedef unsigned uint;
 typedef double Float;
 typedef long double LongFloat;
@@ -33,16 +36,19 @@ struct Value
 {
   Value() : Value(0,0,0) {}
   
-  Value(LongFloat min, LongFloat max, bins=1u<<7)
+  // min and max histo values
+  // the add() function must be used instead of operator<<
+  // be careful not to add improved (reduced variance) estimators to the histo
+  Value(LongFloat min, LongFloat max, size_t bins=1u<<7)
    : _n_samples(0), _means_k(0),
-     _histo(1u<<7),
+     _histo(bins),
      _histo_min(min), _histo_max(max),
      _min_sample(+infinity<LongFloat>()), _max_sample(-infinity<LongFloat>())
   { _means.reserve(max_n_means); }
   
-  void add(LongFloat x, LongFLoat xh)
+  void add(LongFloat x, LongFloat xh)
   {
-    add(x);
+    add_(x);
     
     if ( xh < _min_sample ) _min_sample = xh;
     if ( xh > _max_sample ) _max_sample = xh;
@@ -53,10 +59,65 @@ struct Value
     ++_histo[max(0,min<int>( n-1, lround(bin-.5) ))];
   }
   
-  void operator<<(LongFloat x)
-  { Assert(!_histo.size()); add(x) }
+  void add(LongFloat x) { add(x, x); }
   
-  void add(LongFloat x)
+  void operator<<(LongFloat x)
+  { Assert(!_histo.size()); add_(x); }
+  
+  uint64_t n_samples() const { return _n_samples; }
+  
+  LongFloat mean() const
+  {
+    LongFloat mean_ = 0;
+    if ( _n_samples ) {
+      const uint n = _sums.size();
+      FOR(k, n)
+        mean_ += _sums[k].x;
+      mean_ /= _n_samples;
+    } else
+      mean_ = NAN;
+    
+    return mean_;
+  }
+  
+  const vector<LongFloat>& means() const { return _means; }
+  
+  uint default_bin_size_exp() const { return _means_k; }
+  
+  LongFloat error() const { return error(default_bin_size_exp()); }
+  
+  LongFloat error(uint k) const
+  {
+    if ( k+1 >= _sums.size() )
+      return INFINITY;
+    
+    const LongFloat mean2         = sq(mean());
+    const uint64_t  n_x2_samples_ = n_x2_samples(k);
+    const LongFloat var           = _sums[k].x2 - n_x2_samples_*(exp2i(k)*mean2);
+    return sqrt(max(var,LongFloat(0)) + 2*mean2) / n_x2_samples_;
+    // + 2*mean2 in case the algorithm isn't very ergodic
+  }
+  
+  vector<LongFloat> binned_errors() const
+  {
+    vector<LongFloat> errors_;
+    const int n_sums = _sums.size();
+    FOR(k, n_sums-1)
+      errors_.push_back( error(k) );
+    return errors_;
+  }
+  
+  static bool brief;
+  
+protected:
+  struct Sum {
+    Sum(LongFloat x_) : x(x_), x2(x_*x_) {}
+    
+    LongFloat x;
+    LongFloat x2;
+  };
+  
+  void add_(LongFloat x)
   {
     Assert_( _means_k == calc_means_k(), _means_k );
     
@@ -96,62 +157,9 @@ struct Value
     ++_n_samples;
   }
   
-  uint64_t n_samples() const { return _n_samples; }
-  
-  LongFloat mean() const
-  {
-    LongFloat mean_ = 0;
-    if ( _n_samples ) {
-      const uint n = _sums.size();
-      FOR(k, n)
-        mean_ += _sums[k].x;
-      mean_ /= _n_samples;
-    } else
-      mean_ = NAN;
-    
-    return mean_;
-  }
-  
-  const vector<LongFloat>& means() const { return _means; }
-  
-  uint default_bin_size_exp() const { return _means_k; }
-  
-  LongFloat error() const { return error(default_bin_size_exp()); }
-  
-  LongFloat error(uint k) const
-  {
-    if ( k+1 >= _sums.size() )
-      return INFINITY;
-    
-    const LongFloat mean2         = sq(mean());
-    const uint64_t  n_x2_samples_ = n_x2_samples(k);
-    const LongFloat var           = _sums[k].x2 - n_x2_samples_*(exp2i(k)*mean2);
-    return sqrt(max(var, 2*mean2)) / n_x2_samples_;
-    // don't trust it, perhaps all spins are always up
-  }
-  
-  vector<LongFloat> binned_errors() const
-  {
-    vector<LongFloat> errors_;
-    const int n_sums = _sums.size();
-    FOR(k, n_sums-1)
-      errors_.push_back( error(k) );
-    return errors_;
-  }
-  
-  static bool brief;
-  
-protected:
-  struct Sum {
-    Sum(LongFloat x_) : x(x_), x2(x_*x_) {}
-    
-    LongFloat x;
-    LongFloat x2;
-  };
-  
   bool full(uint k) const { return _n_samples & exp2i(k); }
   
-  //friend ostream& operator<<(ostream &os, const Sum &sum);
+  friend ostream& operator<<(ostream &os, const Value &value);
   
   // number of samples that went into _sums[k].x2
   uint64_t n_x2_samples(uint k) const
@@ -179,9 +187,6 @@ private:
 bool       Value::brief       = false;
 const uint Value::max_n_means = 1u<<6;
 
-//ostream& operator<<(ostream &os, const Value::Sum &sum)
-//{ return os << "sum[" << sum.x << ", " << sum.x2 << "]"; }
-
 ostream& operator<<(ostream &os, const Value &value)
 {
   os << "value["                   << value.mean()
@@ -191,9 +196,11 @@ ostream& operator<<(ostream &os, const Value &value)
   os << ",\n\"means\" -> "         << value.means()
      << ",\n\"binned errors\" -> " << value.binned_errors();
   if ( value._histo.size() ) {
-  os << ",\n\"histo\" -> "         << value._histo()
+  os << ",\n\"histo\" -> "         << value._histo
      << ",\n\"histo min\" -> "     << value._histo_min
-     << ",\n\"histo max\" -> "     << value._histo_max
+     << ", \"histo max\" -> "      << value._histo_max
+     << ", \"min sample\" -> "     << value._min_sample
+     << ", \"max sample\" -> "     << value._max_sample;
   }}
   return os << "]";
 }
@@ -239,22 +246,34 @@ public:
   {
     Assert(_n_sweeps);
     
+    #define TIME(t, f) do{ \
+      using namespace std::chrono; \
+      const auto t0 = steady_clock::now(); \
+      f; \
+      t << duration_cast<duration<LongFloat>>(steady_clock::now() - t0).count(); \
+    }while(0)
+    
     const uint64_t nSweeps = _n_sweeps + _thermalization;
     for ( ; _sweep_num<nSweeps; ++_sweep_num ) {
       _thermalizing = _sweep_num < _thermalization;
       switch (_update_method) {
         case UpdateMethod::local:
-          local_update(!_thermalizing, false);
+          TIME(_t_local, local_update(false));
+          if (!_thermalizing)
+            TIME(_t_measure, measure());
           break;
         case UpdateMethod::global:
           if (n_ == 1)
-            global_update(!_thermalizing);
+            TIME(_t_global, global_update(!_thermalizing));
           else {
-            global_update(false);
-            if ( potential() )
-              local_update(false);
+            for (uint i=0; i<4; ++i) {
+              if ( bool_dist(random_engine) )
+                TIME(_t_local,  local_update());
+              else
+                TIME(_t_global, global_update());
+            }
             if ( !_thermalizing )
-              global_update(true);
+              TIME(_t_measure, global_update(true));
           }
           break;
         default:
@@ -264,22 +283,27 @@ public:
       if ( (_sweep_num%16)==0 )
         normalize_spins(); // to prevent roundoff error
     }
+    #undef TIME
   }
   
-  Float              J;
   const Size         N; // number of spins
   const vector<uint> L_;
   const uint         n_;
+  Float              J_;
+  vector<Float>      J_anisotropy;
+  bool                _layered;
   
   friend ostream& operator<<(ostream &os, const MC &mc);
   friend ostream& operator<<(ostream &os, UpdateMethod method);
   
 protected:
   MC(Size N_, const vector<uint> &L_v, uint n__)
-    : J(0),
-      N(N_),
+    : N(N_),
       L_(L_v),
       n_(n__),
+      J_(0),
+      J_anisotropy(L_v.size(), 1),
+     _layered(false),
      _update_method(UpdateMethod::global),
       index_dist(0, N_-1),
      _thermalizing(false),
@@ -287,14 +311,26 @@ protected:
      _annealing(0),
      _n_sweeps(0),
      _sweep_num(0),
-     _histo_1 (1u<<7),
-     _histo_a4(1u<<7)
+     _sum_1(0,1),
+     _sum_a4(LongFloat(1.)/n_-sum_a4_sub(),1-sum_a4_sub()),
+     _sum_cos3(-1,+1),
+     _sum_OnZ2Z2_sigma2(0,.25),
+     _sum_OnZ2Z2_u(-sum_OnZ2Z2_u_sub(),.25-sum_OnZ2Z2_u_sub()),
+     _sum_OnZ2Z2_v(-sum_OnZ2Z2_v_sub(),.25-sum_OnZ2Z2_v_sub()),
+     _sum_tri_u(-LongFloat(1)/6,.5),
+     _sum_tri_v(-.25,+.25) // was mistakenly +/- 3*sqrt(LongFloat(3))/8 until Nov 24, 2013
   { }
   
   virtual void set_potential_func(const SpinFunc *V) =0;
   
-  virtual void  local_update(bool measure, bool allow_simple=true) =0;
-  virtual void global_update(bool measure) =0;
+  virtual void  local_update(bool allow_simple=true) =0;
+  virtual void global_update(bool measure=false) =0;
+  virtual void measure() =0;
+  
+  LongFloat sum_a4_sub()       const { return LongFloat(3)/(2+n_); }
+  LongFloat sum_OnZ2Z2_u_sub() const { return LongFloat(.25*n_)/(2+n_); }
+  LongFloat sum_OnZ2Z2_v_sub() const { return LongFloat(.5)/(2+n_); }
+  LongFloat sum_tri_u_sub()    const { return .5; }
   
   UpdateMethod _update_method;
   
@@ -303,10 +339,11 @@ protected:
   string           _potential_name;
   bool             _thermalizing;
   uint64_t         _thermalization, _annealing, _n_sweeps, _sweep_num;
-  Value            _sum_1, _sum_2, _sum_2_q1, _sum_2_q2, _sum_4, _sum_6, _sum_a4, _sum_cos3, _sum_tri_u, _sum_tri_v;
-  vector<uint64_t> _histo_1, _histo_a4;
+  Value            _sum_1, _sum_2, _sum_2_q1, _sum_2_q2, _sum_4, _sum_6, _sum_a4;
+  //, _sum_cos3, _sum_OnZ2Z2_sigma2, _sum_OnZ2Z2_sigma4, _sum_OnZ2Z2_u, _sum_OnZ2Z2_v, _sum_tri_u, _sum_tri_v;
   Value            _n_measurement_clusters, _n_potential_clusters;
   vector<Value>    _n_clusters;
+  Value            _t_local, _t_global, _t_measure;
 };
 MC::~MC() {}
 
@@ -414,7 +451,7 @@ struct SpinFlipper {
   
   virtual uint  n_flippers() const { return 1; }
   virtual uint flipper_num() const { return 0; }
-  virtual bool allow_invert() const { return true; }
+  virtual bool allow_invert() const { return true; } // true if s -> -s is a symmetry
 };
 SpinFlipper::~SpinFlipper() {}
 
@@ -438,6 +475,44 @@ struct InvertSpin_ : public SpinFlipper_<n> {
   virtual void  flip_(Spin &s) const final { s += (-2*(s|r)) * r; }
   
   Spin r;
+};
+
+template<uint n>
+struct InvertSpin_OnZ2Z2_ : public SpinFlipper_<2*n> {
+  typedef Spin_<  n> Spin1;
+  typedef Spin_<2*n> Spin2;
+  
+  virtual uint  n_flippers() const { return 6; }
+  virtual uint flipper_num() const { return 2*flipN + invertQ; }
+  
+  virtual void  reset() final {
+    flipN   = bool_dist(random_engine) ? 1 + bool_dist(random_engine) : 0;
+    invertQ = !flipN || bool_dist(random_engine);
+    if ( invertQ )
+      r = Spin1::random();
+  }
+  
+  virtual void  flip_(Spin2 &s) const final
+  {
+    if ( flipN )
+      for (uint i=(flipN-1)*n; i<flipN*n; ++i)
+        s[i] = -s[i];
+    
+    if ( invertQ )
+      for (uint i0=0; i0<=n; i0+=n) {
+        // s_a += (-2*(s_a|r)) * r
+        Float c = 0;
+        for (uint i=0; i<n; ++i)
+          c += s[i+i0]*r[i];
+        c *= -2;
+        for (uint i=0; i<n; ++i)
+          s[i+i0] += c*r[i];
+      }
+  }
+  
+  uint  flipN;
+  bool  invertQ;
+  Spin1 r;
 };
 
 template<uint n>
@@ -525,9 +600,26 @@ SpinFunc::~SpinFunc() {}
 
 template<uint n>
 struct SpinFunc_ : public SpinFunc {
+  typedef Spin_<n> Spin;
   virtual ~SpinFunc_() {}
-  virtual Float operator()(Spin_<n> s) const =0;
-  virtual Spin_<n> ideal_spin() const = 0;
+  virtual Float operator()(Spin s) const =0;
+  virtual Spin ideal_spin() const = 0;
+  
+  Spin ideal_spin_from(vector<Spin> &candidates) const
+  {
+    Spin *min_s = nullptr;
+    Float min_V = infinity<Float>();
+    for (Spin &s0: candidates) {
+      s0.normalize();
+      const Float V0 = _this(s0);
+      if ( V0 < min_V ) {
+        min_s = &s0;
+        min_V = V0;
+      }
+    }
+    Assert (min_s);
+    return *min_s;
+  }
 };
 
 template<uint n, typename float_>
@@ -548,22 +640,11 @@ struct s4_Potential_ : public SpinFunc_<n> {
   const Float u;
 };
 
-unique_ptr<SpinFunc> make_s4_Potential(Float u, uint n)
-{
-  SpinFunc *potential = nullptr;
-  if      (n==2) potential = new s4_Potential_<2>(u);
-  else if (n==3) potential = new s4_Potential_<3>(u);
-  else if (n==4) potential = new s4_Potential_<4>(u);
-  
-  Assert_(potential, n);
-  return unique_ptr<SpinFunc>(potential);
-}
-
-// 2*cos(m*theta)
+// cos(m*theta)
 template<uint m, uint n, typename float_>
 float_ cos_potential(Spin_<n,float_> s) {
   Assert(n==2);
-  complex<Float> z(s[0], s[1]);
+  complex<float_> z(s[0], s[1]);
   return real(Pow<m>(z));
 }
 
@@ -578,18 +659,42 @@ struct cos_Potential_ : public SpinFunc_<2> {
   const Float u;
 };
 
-unique_ptr<SpinFunc> make_cos_Potential(Float u, uint m)
-{
-  SpinFunc *potential = nullptr;
-  if      (m==2) potential = new cos_Potential_<2>(u);
-  else if (m==3) potential = new cos_Potential_<3>(u);
-  else if (m==4) potential = new cos_Potential_<4>(u);
-  else if (m==6) potential = new cos_Potential_<6>(u);
-  else if (m==8) potential = new cos_Potential_<8>(u);
-
-  Assert_(potential, m);
-  return unique_ptr<SpinFunc>(potential);
+template<uint n2, typename float_>
+pair<float_,float_> OnZ2Z2_potential(const Spin_<n2,float_> s) {
+  const uint n = n2/2;
+  Assert(2*n == n2);
+  float_ s1=0, s2=0, v_=0;
+  for (uint i=0; i<n; ++i) {
+    s1 += sq(s[i  ]);
+    s2 += sq(s[i+n]);
+    v_ += s[i]*s[i+n];
+  }
+  return std::make_pair(s1*s2, sq(v_));
 }
+
+template<uint n>
+struct OnZ2Z2_Potential_ : public SpinFunc_<2*n> {
+  typedef Spin_<2*n> Spin;
+  
+  OnZ2Z2_Potential_(Float u_, Float v_) : u(u_), v(v_) {}
+  
+  virtual Float operator()(Spin s) const final {
+    pair<Float,Float> V = OnZ2Z2_potential<2*n>(s);
+    return u*V.first + v*V.second;
+  }
+  virtual vector<Float> coefficients() const final { return {u,v}; }
+  
+  virtual Spin ideal_spin() const final
+  {
+    vector<Spin> candidates(3);
+    candidates[0][0] = 1;
+    candidates[1][0] = candidates[1][n  ] = 1/sqrt(2);
+    candidates[2][0] = candidates[2][n+1] = 1/sqrt(2);
+    return this->ideal_spin_from(candidates);
+  }
+  
+  const Float u, v;
+};
 
 struct VisonSquare_sVBS_Potential : public SpinFunc_<4>
 {
@@ -610,13 +715,13 @@ struct VisonSquare_sVBS_Potential : public SpinFunc_<4>
 };
 
 template<uint n, typename float_>
-pair<float_,float_> visonTriangle_potential(Spin_<n,float_> s) {
+pair<float_,float_> visonTriangle_potential(const Spin_<n,float_> s) {
   Assert(n==6);
   Spin_<n,float_> s2;
   FOR(a,6) s2[a] = s[a]*s[a];
   return std::make_pair(
     sq(s2[0]+s2[1])     +     sq(s2[2]+s2[3])     +     sq(s2[4]+s2[5]),
-      (s2[0]-s2[1])*s[2]*s[3] + (s2[2]-s2[3])*s[4]*s[5] + (s2[4]-s2[5])*s[0]*s[1] );
+   2*((s2[0]-s2[1])*s[2]*s[3] + (s2[2]-s2[3])*s[4]*s[5] + (s2[4]-s2[5])*s[0]*s[1]) );
 }
 
 struct VisonTrianglePotential : public SpinFunc_<6>
@@ -635,7 +740,7 @@ struct VisonTrianglePotential : public SpinFunc_<6>
   virtual Spin ideal_spin() const final
   {
     const Float c=cos(pi/8), s=sin(pi/8), r=sqrt(.5);
-    Spin candidates[] = {
+    vector<Spin> candidates = {
       {{1,0,0,0,0,0}}, // c-VBS
       {{c,s,0,0,0,0}}, // plaquette VBS
       {{r,r,0,0,1,0}}, // s-VBS
@@ -643,18 +748,7 @@ struct VisonTrianglePotential : public SpinFunc_<6>
       {{c,s,c,s,c,s}}, // star VBS
       {{s,c,s,c,s,c}}  // triangle VBS
     };
-    Spin *min_s = nullptr;
-    Float min_V = infinity<Float>();
-    for (Spin &s0: candidates) {
-      s0.normalize();
-      const Float V0 = _this(s0);
-      if ( V0 < min_V ) {
-        min_s = &s0;
-        min_V = V0;
-      }
-    }
-    Assert (min_s);
-    return *min_s;
+    return ideal_spin_from(candidates);
   }
   
   const Float u, v;
@@ -668,9 +762,11 @@ class MC_ : public MC
 {
   enum class InitTemp { none, high, low };
 public:
-  typedef Spin_<n,    Float> Spin;
-  typedef Spin_<n,LongFloat> SpinSum;
-  typedef array<Index,2*dim> NearestNeighbors;
+  typedef Spin_<n,    Float>    Spin;
+  typedef Spin_<n,LongFloat>    SpinSum;
+  
+  struct Neighbor { Index i; uint d; };
+  typedef array<Neighbor,2*dim> NearestNeighbors;
   
   // POD is zero initialized by {}
   static_assert( std::is_pod<Spin>::value, "Spin isn't POD" );
@@ -710,7 +806,7 @@ public:
       q[d] = (q[d] + L[d] + dir) % L[d];
       const Index j = index(q);
       
-      nn[k++] = j;
+      nn[k++] = Neighbor{j, d};
     }
     
     return nn;
@@ -734,8 +830,11 @@ public:
   virtual void normalize_spins() final
   { FOR(i,N) _spins[i].normalize(); }
   
-  virtual void local_update(const bool measure_, const bool allow_simple) final __attribute__((hot))
+  virtual void local_update(const bool allow_simple) final __attribute__((hot))
   {
+    if ( _setup )
+      setup();
+    
     const Size n_updaes = 1+index_dist(random_engine);
     for (Size count=0; count<n_updaes; ++count) {
       const Index i      = index_dist(random_engine);
@@ -743,16 +842,18 @@ public:
       
       const Spin s1 = _spins[i];
       Spin sum_nn{};
-      for(Index nn : nearestNeighbors(i))
-        sum_nn += _spins[nn];
+      for(Neighbor nn : nearestNeighbors(i))
+        sum_nn += J[nn.d] * _spins[nn.i]; // TODO
       
       Spin s2;
       Float delta_E = 0;
       if (!simple) {
         s2 = n==1 ? -s1 : Spin::random();
-        delta_E += -J*((s2-s1)|sum_nn);
-      } else
-        s2 = (2*(s1|sum_nn)/sq(sum_nn))*sum_nn - s1;
+        delta_E += -((s2-s1)|sum_nn);
+      } else {
+        const Float norm = sq(sum_nn);
+        s2 = norm!=0 ? (2*(s1|sum_nn)/norm)*sum_nn - s1 : -s1;
+      }
       
       if (_V)
         delta_E += V(s2) - V(s1);
@@ -761,40 +862,27 @@ public:
       if ( delta_E <= 0 || uniform_dist(random_engine) < exp(-delta_E) )
         _spins[i] = s2;
     }
-    
-    if ( measure_ )
-      measure();
   }
   
-  virtual void global_update(const bool measure_) final __attribute__((hot))
+  virtual void global_update(const bool measure_=false) final __attribute__((hot))
   {
+    if ( _setup )
+      setup();
+    
     if ( _setup_global_update )
     {
+      FOR(d, dim)
+      if ( _use_q_dim[d] )
+        _clusterSums_q[d].reset(new array<SpinSum,4>[N]); 
+      
       _n_clusters.resize( _flipper->n_flippers() );
-      
-      if ( _V ) {
-        const Spin ideal_spin = _V->ideal_spin();
-        const Float V_min = V(ideal_spin);
-        FOR(i, 100) {
-          const bool measure0 = i<3 && _flipper->allow_invert();
-          _flipper->reset();
-          const Spin  s1 = Spin::random();
-          const Spin  s2 = _flipper->flipped(s1,measure0);
-          const Spin  s3 = _flipper->flipped(s2,measure0);
-          const Float V1 = V(s1);
-          const Float delta_V = V(s2) - V1;
-          const Float norm_s13 = (s1-s3).norm();
-          Assert_( is_small(delta_V), s1, delta_V );
-          Assert_( is_small(norm_s13), s1, s3, norm_s13 );
-          Assert_( V_min <= V1, V_min, V1, ideal_spin, s1 );
-        }
-      }
-      
+      check_potential();
       _setup_global_update = false;
     }
     
     if ( measure_ && !_flipper->allow_invert() ) {
       // s -> -s improved estimator code isn't allowed
+      Assert(n>1);
       measure();
       return;
     }
@@ -810,22 +898,38 @@ public:
     Size nClusters = 0;
     FOR(i0, N)
     if (!_cluster[i0]) {
-      const bool flipCluster = !force_wolff && bool_dist(random_engine);
+      const bool flip_cluster = !force_wolff && bool_dist(random_engine);
       Index *newIndex = _newIndexStack.get();
       
-      #define sum_cluster_q(op, i) do{ \
-        _clusterSums[nClusters] op (s); \
+      #define sum_cluster_q_(op, i) \
         const Pos p = pos(i); \
-        FOR(d, dim) \
-        if ( L[d] == L[0] ) { \
-          const uint x1 =    p[d]; \
-          const uint x2 = (2*p[d])%L[0]; \
-          _clusterSums_q[d][nClusters][0] op (_cos[x1] * s); \
-          _clusterSums_q[d][nClusters][1] op (_sin[x1] * s); \
-          _clusterSums_q[d][nClusters][2] op (_cos[x2] * s); \
-          _clusterSums_q[d][nClusters][3] op (_sin[x2] * s); \
+        const bool sumQ = !_layered || p[dim-1]==0; \
+        if ( sumQ ) { \
+          _clusterSums[nClusters] op (s); \
+           \
+          FOR(d, dim) \
+          if ( _use_q_dim[d] ) { \
+            const uint x1 =    p[d]; \
+            const uint x2 = (2*p[d])%L[0]; \
+            _clusterSums_q[d][nClusters][0] op (_cos[x1] * s); \
+            _clusterSums_q[d][nClusters][1] op (_sin[x1] * s); \
+            _clusterSums_q[d][nClusters][2] op (_cos[x2] * s); \
+            _clusterSums_q[d][nClusters][3] op (_sin[x2] * s); \
+          } \
+        }
+      
+      #define set_cluster_q(i) do{ \
+        sum_cluster_q_(=SpinSum, i) \
+        else { \
+          _clusterSums[nClusters] = {}; \
+           \
+          FOR(d, dim) \
+          if ( _use_q_dim[d] ) \
+            _clusterSums_q[d][nClusters] = {}; \
         } \
       } while(0)
+      
+      #define add_cluster_q(i) do{ sum_cluster_q_(+=, i) } while(0)
       
       *newIndex = i0;
       _cluster[i0] = true;
@@ -835,38 +939,44 @@ public:
       {
         const Spin s = _spins[i0];
         if ( measure_ )
-          sum_cluster_q(=SpinSum, i0);
+          set_cluster_q(i0);
         if ( force_wolff ) {
-          _cluster_indices[n_cluster_indices++] = i0;
+          _cluster_indices[n_cluster_indices++] = i0; // _cluster_indices is a list of indices in the cluster
           cluster_delta_V += V(_wolff_flipper.flipped(s,false)) - V(s);
         }
-        if ( flipCluster )
+        if ( flip_cluster )
           flipper.flip(_spins[i0], measure_);
       }
       
       do {
         const Index j = *(newIndex--);
         
-        for(Index i : nearestNeighbors(j))
+        for(Neighbor nn : nearestNeighbors(j)) {
+          const Index i = nn.i;
           if ( !_cluster[i] ) {
             const Spin s = _spins[i];
             const Spin flipped_s = flipper.flipped(s, measure_);
-            const Float delta_E = anneal( -J*(1-2*flipCluster) * ((flipped_s-s)|_spins[j]) );
+            const Float delta_E = anneal( -J[nn.d]*(1-2*flip_cluster) * ((flipped_s-s)|_spins[j]) );
             if ( delta_E > 0 && uniform_dist(random_engine) > exp(-delta_E) ) {
               *(++newIndex) = i;
               _cluster[i] = true;
               if ( measure_ )
-                sum_cluster_q(+=, i);
+                add_cluster_q(i);
               if ( force_wolff ) {
                 _cluster_indices[n_cluster_indices++] = i;
                 cluster_delta_V += V(flipped_s) - V(s);
               }
-              if ( flipCluster )
+              if ( flip_cluster )
                 _spins[i] = flipped_s;
             }
           }
+        }
       }
       while ( newIndex+1 != _newIndexStack.get() );
+      
+      #undef sum_cluster_q_
+      #undef set_cluster_q
+      #undef add_cluster_q
       
       if ( force_wolff ) {
         cluster_delta_V = anneal(cluster_delta_V);
@@ -906,7 +1016,7 @@ public:
         }
         
         FOR(d, dim)
-        if ( L[d] == L[0] )
+        if ( _use_q_dim[d] )
         FOR(cs, 2) {
           sum_2_q1 += sq(_clusterSums_q[d][c][0+cs]);
           sum_2_q2 += sq(_clusterSums_q[d][c][2+cs]);
@@ -914,13 +1024,9 @@ public:
       }
       const SpinMatrix M2_2 = M2|M2;
       
-      uint n_q_dim = 0;
-      FOR(d, dim)
-        if ( L[d] == L[0] )
-          ++n_q_dim;
-      
+      const LongFloat N1 = _layered ? N/L[dim-1] : N;
+      S1 /= N1;
       const LongFloat
-      N1      = LongFloat(N),
       N2      = sq(N1),
       N4      = sq(N2),
       N6      = N2*N4,
@@ -930,33 +1036,22 @@ public:
       S_2_2   = tr(M2_2),
       S_2_2_2 = tr(M2_2, M2),
       S_4_2   = tr(M4, M2),
-      Q2_2    = Q2|Q2;
+      Q2_2    =   (Q2|Q2);
       
       LongFloat sum_4;
-      _sum_1    << (       S1_ )/N;
-      _sum_2    << (       S2  )/N2;
-      _sum_2_q1 << (       sum_2_q1 )/(n_q_dim*N2);
-      _sum_2_q2 << (       sum_2_q2 )/(n_q_dim*N2);
-      _sum_4    << (sum_4= sq(S2) - 2*S4 + 2*S_2_2 )/N4;
-      _sum_6    << (       Pow<3>(S2) - 6*S2*S4 + 16*S6 + 6*S2*S_2_2 - 24*S_4_2 + 8*S_2_2_2 )/N6;
-      fill_histo(_histo_1, S1_/N);
+      _sum_1   .add       (S1_);
+      _sum_2    <<         S2/N2;
+      _sum_2_q1 <<         sum_2_q1 / (_n_q_dim*N2);
+      _sum_2_q2 <<         sum_2_q2 / (_n_q_dim*N2);
+      _sum_4    << (sum_4=(sq(S2) - 2*S4 + 2*S_2_2)/N4 );
+      _sum_6    <<        (Pow<3>(S2) - 6*S2*S4 + 16*S6 + 6*S2*S_2_2 - 24*S_4_2 + 8*S_2_2_2)/N6;
       if (n > 1) {
-        const LongFloat
-        a4f = (LongFloat(3)/(2+n)),
-        sum_a4_pos = (3*Q2_2 - 2*S4_1)/N4, // TODO
-        sum_a4     = (3*Q2_2 - 2*S4_1 - a4f*sum_4)/N4;
+        const LongFloat sum_a4   = (3*Q2_2 - 2*S4_1)/N4 - sum_a4_sub()*sum_4;
+        const LongFloat sum_a4_h = s4_potential(S1)     - sum_a4_sub()*sum_4;
         
-        _sum_a4 << sum_a4;
-        fill_histo(_histo_a4, sum_a4_pos/n); // TODO
+        _sum_a4.add(sum_a4, sum_a4_h);
       }
-      if (n == 2)
-        _sum_cos3 << cos_potential<3>(S1/N1);
-      if (n == 6) { // TODO improved estimators
-        pair<LongFloat,LongFloat> V_uv = visonTriangle_potential(S1);
-        
-        _sum_tri_u << (V_uv.first - .5*sum_4)/N4; // TODO I don't understand the .5
-        _sum_tri_v <<  V_uv.second/N4;
-      }
+      measure_potentials(S1, sum_4);
       
       _n_measurement_clusters << nClusters;
     }
@@ -983,75 +1078,74 @@ public:
   Float V(Spin s) const { return (*_V)(s); }
   
 protected:
-  void measure()
+  virtual void measure() final
   {
     SpinSum sum{}, sum_q1[dim][2]{}, sum_q2[dim][2]{};
     FOR(i, N) {
-      const Spin s = _spins[i];
-      sum += s;
       const Pos p = pos(i);
-      
-      FOR(d, dim)
-      if ( L[d] == L[0] ) {
-        const uint x1=   p[d];
-        const uint x2=(2*p[d])%L[0];
-        sum_q1[d][0] += _cos[x1] * s;
-        sum_q1[d][1] += _sin[x1] * s;
-        sum_q2[d][0] += _cos[x2] * s;
-        sum_q2[d][1] += _sin[x2] * s;
+      if ( !_layered || p[dim-1]==0 ) {
+        const Spin s = _spins[i];
+        sum += s;
+        
+        FOR(d, dim)
+        if ( _use_q_dim[d] ) {
+          const uint x1 =    p[d];
+          const uint x2 = (2*p[d])%L[0];
+          sum_q1[d][0] += _cos[x1] * s;
+          sum_q1[d][1] += _sin[x1] * s;
+          sum_q2[d][0] += _cos[x2] * s;
+          sum_q2[d][1] += _sin[x2] * s;
+        }
       }
     }
-    sum /= N;
+    const LongFloat N1 = _layered ? N/L[dim-1] : N;
+    sum /= N1;
     
     const LongFloat
-    N2 = sq(LongFloat(N)),
+    N2 = sq(N1),
     sum_2 = sq(sum),
     sum_4 = sq(sum_2);
     
-    uint n_q_dim = 0;
     LongFloat sum_2_q1=0, sum_2_q2=0;
     FOR(d, dim)
-      if ( L[d] == L[0] ) {
-        ++n_q_dim;
+      if ( _use_q_dim[d] )
         FOR(cs, 2) {
           sum_2_q1 += sq(sum_q1[d][cs]);
           sum_2_q2 += sq(sum_q2[d][cs]);
         }
-      }
-    sum_2_q1 /= n_q_dim*N2;
-    sum_2_q2 /= n_q_dim*N2;
+    sum_2_q1 /= _n_q_dim*N2;
+    sum_2_q2 /= _n_q_dim*N2;
     
-    const LongFloat sum_1 = sum.norm();
+    const LongFloat sum_1 = sqrt(sum_2);
     
-    _sum_1    <<         sum_1;
+    _sum_1   .add       (sum_1);
     _sum_2    <<         sum_2;
     _sum_2_q1 <<         sum_2_q1;
     _sum_2_q2 <<         sum_2_q2;
     _sum_4    <<         sum_4;
     _sum_6    <<  Pow<3>(sum_2);
-    fill_histo(_histo_1, sum_1);
-    if (n > 1) {
-      const LongFloat
-      a4f        = (LongFloat(3)/(2+n)),
-      sum_a4_pos = s4_potential(sum), // TODO
-      sum_a4     = sum_a4_pos - a4f*sum_4;
-      
-      _sum_a4 << sum_a4;
-      fill_histo(_histo_a4, sum_a4_pos/n);
-    }
-    if (n == 2)
-      _sum_cos3 << cos_potential<3>(sum);
-    if (n == 6) {
-      pair<LongFloat,LongFloat> V_uv = visonTriangle_potential(sum);
-      
-      _sum_tri_u << V_uv.first - .5*sum_4;
-      _sum_tri_v << V_uv.second;
-    }
+    if (n > 1)
+      _sum_a4.add( s4_potential(sum) - sum_a4_sub()*sum_4 );
+    measure_potentials(sum, sum_4);
   }
   
-  // 0 < x < 1
-  void fill_histo(vector<uint64_t> &histo, Float x) {
-    ++histo[max(0,min<int>(histo.size()-1, lround(histo.size()*x-.5) ))];
+  void measure_potentials(const SpinSum S1, const LongFloat sum_4)
+  {
+    if ( dynamic_cast<const cos_Potential_<3>*>(_V) )
+      _sum_cos3.add( cos_potential<3>(S1) );
+    if ( dynamic_cast<const OnZ2Z2_Potential_<n/2>*>(_V) ) {
+      pair<LongFloat,LongFloat> V_uv = OnZ2Z2_potential(S1);
+      _sum_OnZ2Z2_u     .add( V_uv.first  - sum_OnZ2Z2_u_sub()*sum_4 );
+      _sum_OnZ2Z2_v     .add( V_uv.second - sum_OnZ2Z2_v_sub()*sum_4 );
+      _sum_OnZ2Z2_sigma2.add( V_uv.first );
+      _sum_OnZ2Z2_sigma4 << sq(V_uv.first);
+    }
+    if ( dynamic_cast<const VisonTrianglePotential*>(_V) ) {
+      // TODO improved estimators
+      pair<LongFloat,LongFloat> V_uv = visonTriangle_potential(S1);
+      _sum_tri_u.add( V_uv.first - sum_tri_u_sub()*sum_4 );
+      _sum_tri_v.add( V_uv.second );
+    }
   }
   
   Float anneal(Float delta_E) const {
@@ -1065,25 +1159,62 @@ protected:
       Assert(false);
   }
   
+  void setup()
+  {
+    _n_q_dim = 0;
+    FOR(d, dim) {
+      J[d] = J_ * J_anisotropy[d];
+      _use_q_dim[d] = L[d] == L[0] && J[d] == J[0] && (!_layered || d+1<dim);
+      if ( _use_q_dim[d] )
+        ++_n_q_dim;
+    }
+    
+    _setup = false;
+  }
+  
+  void check_potential() const
+  {
+    if ( _V ) {
+      const Spin ideal_spin = _V->ideal_spin();
+      Assert_( is_small(abs(ideal_spin.norm()-1)), ideal_spin);
+      const Float V_min = V(ideal_spin);
+      FOR(i, 100) {
+        const bool measure0 = i<3 && _flipper->allow_invert();
+        _flipper->reset();
+        const Spin  s1 = Spin::random();
+        const Spin  s2 = _flipper->flipped(s1,measure0);
+        const Spin  s3 = _flipper->flipped(s2,measure0); // should == s1
+        const Float V1 = V(s1);
+        const Float delta_V = V(s2) - V1;
+        const Float norm_s13 = (s1-s3).norm();
+        Assert_( is_small(delta_V), s1, s2, delta_V );
+        Assert_( is_small(norm_s13), s1, s3, norm_s13 );
+        Assert_( V_min <= V1, V_min, V1, ideal_spin, s1 );
+      }
+    }
+  }
+  
   MC_(const array<uint,dim> &L__, const vector<uint> &L_v, Size N_)
     : MC(N_, L_v, n),
       L(L__),
      _spins(new Spin[N_]),
      _newIndexStack(new Index[N_]),
      _clusterSums(new SpinSum[N_]),
+     _n_q_dim(0),
+     _use_q_dim{},
      _cluster_indices(new Index[N_]),
      _cos(new Float[L[0]]),
      _sin(new Float[L[0]]),
      _flipper(nullptr),
      _V(nullptr),
      _init_temp(InitTemp::none),
+     _setup(true),
      _setup_global_update(true)
   {
     set_flipper(nullptr);
     
     FOR(d, dim)
-    if ( L[d] == L[0] )
-      _clusterSums_q[d].reset(new array<SpinSum,4>[N_]);
+      J[d] = NAN;
     
     FOR(x, L[0]) {
       _cos[x] = cos((2*pi*x)/L[0]);
@@ -1104,6 +1235,7 @@ protected:
   virtual ~MC_() {}
   
   const array<uint,dim> L; // lengths
+  array<Float,dim>      J; // includes anisotropy
   
 private:
   const unique_ptr<Spin[]>       _spins;
@@ -1111,6 +1243,8 @@ private:
   const unique_ptr<Index[]>      _newIndexStack;
   const unique_ptr<SpinSum[]>    _clusterSums;
   unique_ptr<array<SpinSum,4>[]> _clusterSums_q[dim]; // 4 = #(q1, q2) * #(cos, sin)
+  uint                           _n_q_dim;
+  bool                           _use_q_dim[dim];
   unique_ptr<Index[]>            _cluster_indices;
   unique_ptr<Float[]>            _cos, _sin;
   
@@ -1119,18 +1253,20 @@ private:
   const SpinFunc_<n> *_V;
   
   InitTemp _init_temp;
-  bool _setup_global_update;
+  bool _setup, _setup_global_update;
 };
 
 bool __brief_values = false;
 ostream& operator<<(ostream &os, const MC &mc)
 {
   const SpinFunc *const potential = mc.potential();
-  vector<IOFloat> J{mc.J};
+  vector<IOFloat> J{mc.J_}, J_anisotropy;
   if (potential) {
     const vector<Float> coefficients = potential->coefficients();
     J.insert(J.end(), coefficients.begin(), coefficients.end());
   }
+  for (Float J_a: mc.J_anisotropy)
+    J_anisotropy.push_back(J_a);
   
   const int old_prec = os.precision();
   os.precision(15);
@@ -1139,30 +1275,37 @@ ostream& operator<<(ostream &os, const MC &mc)
         "\"L\" -> " << mc.L_ << ",\n"
         "\"n\" -> " << mc.n_ << ",\n"
         "\"J\" -> " <<    J  << ",\n"
+        "\"J anisotropy"      "\" -> "   <<   J_anisotropy              <<   ",\n"
         "\"potential"         "\" -> \"" << mc._potential_name          << "\",\n"
         "\"update method"     "\" -> \"" << mc._update_method           << "\",\n"
         "\"sweeps"            "\" -> "   << mc._n_sweeps                <<   ",\n"
         "\"thermalization"    "\" -> "   << mc._thermalization          <<   ",\n"
         "\"annealing"         "\" -> "   << mc._annealing               <<   ",\n"
         "\"|S|"               "\" -> "   << mc._sum_1                   <<   ",\n"
-        "\"histo_1"           "\" -> "   << mc._histo_1                 <<   ",\n"
         "\"S^2"               "\" -> "   << mc._sum_2                   <<   ",\n"
         "\"S^2_q1"            "\" -> "   << mc._sum_2_q1                <<   ",\n"
         "\"S^2_q2"            "\" -> "   << mc._sum_2_q2                <<   ",\n"
         "\"S^4"               "\" -> "   << mc._sum_4                   <<   ",\n"
         "\"S^6"               "\" -> "   << mc._sum_6                   <<   ",\n";
-  if ( mc._sum_a4.   n_samples() )
-    os<<"\"Sa^4"              "\" -> "   << mc._sum_a4                  <<   ",\n"  // should =0 if O(n) symmetry
-        "\"histo_a4"          "\" -> "   << mc._histo_a4                <<   ",\n";
-  if ( mc._sum_cos3. n_samples() )
+  if ( mc._sum_a4      .n_samples() )
+    os<<"\"Sa^4"              "\" -> "   << mc._sum_a4                  <<   ",\n"; // should =0 if O(n) symmetry
+  if ( mc._sum_OnZ2Z2_u.n_samples() )
+    os<<"\"S OnZ2Z2 sigma^2"  "\" -> "   << mc._sum_OnZ2Z2_sigma2       <<   ",\n"
+        "\"S OnZ2Z2 sigma^4"  "\" -> "   << mc._sum_OnZ2Z2_sigma4       <<   ",\n"
+        "\"S OnZ2Z2 u"        "\" -> "   << mc._sum_OnZ2Z2_u            <<   ",\n"
+        "\"S OnZ2Z2 v"        "\" -> "   << mc._sum_OnZ2Z2_v            <<   ",\n"; // should =0 if O(n) symmetry
+  if ( mc._sum_cos3    .n_samples() )
     os<<"\"S cos3"            "\" -> "   << mc._sum_cos3                <<   ",\n";
-  if ( mc._sum_tri_u.n_samples() )
+  if ( mc._sum_tri_u   .n_samples() )
     os<<"\"S tri u"           "\" -> "   << mc._sum_tri_u               <<   ",\n"  // should =0 if O(n) symmetry
         "\"S tri v"           "\" -> "   << mc._sum_tri_v               <<   ",\n"; // should =0 if O(n) symmetry
   Value::brief = true;
   os << "\"measurement clusters\" -> "   << mc._n_measurement_clusters  <<   ",\n"
         "\"potential clusters""\" -> "   << mc._n_potential_clusters    <<   ",\n"
-        "\"clusters"          "\" -> "   << mc._n_clusters              <<    "\n";
+        "\"clusters"          "\" -> "   << mc._n_clusters              <<   ",\n"
+        "\"t local"           "\" -> "   << mc._t_local                 <<   ",\n"
+        "\"t global"          "\" -> "   << mc._t_global                <<   ",\n"
+        "\"t measure"         "\" -> "   << mc._t_measure               <<    "\n";
   Value::brief = false;
   os.precision(old_prec);
   return os << "}\n";
@@ -1193,8 +1336,10 @@ unique_ptr<MC> MC::make(const vector<uint> &L, uint n_fields)
 //ELSE_TRY_MC(1,3)
 //ELSE_TRY_MC(1,6)
   ELSE_TRY_MC(2,1)
-//ELSE_TRY_MC(2,2)
-//ELSE_TRY_MC(2,3)
+  ELSE_TRY_MC(2,2)
+  ELSE_TRY_MC(2,3)
+  ELSE_TRY_MC(2,4)
+  ELSE_TRY_MC(2,6)
   ELSE_TRY_MC(3,1)
   ELSE_TRY_MC(3,2)
   ELSE_TRY_MC(3,3)
@@ -1230,14 +1375,15 @@ int main(const int argc, char *argv[])
   
   vector<uint> L;
   uint n = 0;
-  vector<IOFloat> J_IO;
+  vector<IOFloat> J_IO, J_anisotropy_IO;
   string potential_name;
   po::options_description system_options("physics options");
   system_options.add_options()
-      ("L",         po::value<vector<uint>>(&L)->multitoken(),       "lengths")
-      ("n",         po::value<uint>(&n),                             "for an O(n) model")
-      ("J",         po::value<vector<IOFloat>>(&J_IO)->multitoken(), "spin coupling and other potential coefficients")
-      ("potential", po::value<string>(&potential_name),              "potential term: s^4; cos#; vison hexagon|square|triangle c|s-VBS");
+      ("L",            po::value<vector<uint>>(&L)->multitoken(),                  "lengths")
+      ("n",            po::value<uint>(&n),                                        "for an O(n) model")
+      ("J",            po::value<vector<IOFloat>>(&J_IO)->multitoken(),            "spin coupling and other potential coefficients")
+      ("J-anisotropy", po::value<vector<IOFloat>>(&J_anisotropy_IO)->multitoken(), "spin coupling anisotropy for each dimension")
+      ("potential",    po::value<string>(&potential_name),                         "potential term: s^4, cos#, OnZ2Z2, vison hexagon|square|triangle c|s-VBS");
   
   uint64_t n_sweeps=0;
   uint64_t thermalization=0, annealing=0;
@@ -1249,8 +1395,9 @@ int main(const int argc, char *argv[])
       ("annealing",      po::value<uint64_t>(&annealing),                              "# of annealing sweeps (defaults to #thermalization/4)")
       ("update-method",  po::value<string>(&update_method)->default_value("global"),   "update type: local or global")
       ("initial-state",  po::value<string>(&initial_state)->default_value("low-temp"), "low-temp or high-temp")
+      ("layered",                                                                      "only one layer of correlation length is measured")
       ("file",           po::value<string>(&file_name),                                "save file (or into directory/)")
-      ("replace",        po::value<string>(&replace)->default_value("no"),             "replace file? yes, no, or auto");
+      ("replace",        po::value<string>(&replace)->default_value("no"),             "replace file? yes, no, auto, or auto-error");
   
   po::options_description cmdline_options;
   cmdline_options.add(generic_options)
@@ -1307,9 +1454,9 @@ int main(const int argc, char *argv[])
     
     if ( replace == "no" )
       Assert( !file.good() );
-    else if ( replace == "auto" ) {
+    else if ( replace == "auto" || replace == "auto-error" ) {
       if ( !overwrite_ok(file) )
-        return 0;
+        return replace == "auto-error";
     } else
       Assert(false);
   }
@@ -1318,10 +1465,18 @@ int main(const int argc, char *argv[])
   for (IOFloat j_IO: J_IO)
     J.push_back(j_IO.f);
   
+  vector<Float> J_anisotropy;
+  if ( vm.count("J-anisotropy") ) {
+    Assert( J_anisotropy_IO.size() == L.size() );
+    for (IOFloat j_IO: J_anisotropy_IO)
+      J_anisotropy.push_back(j_IO.f);
+  }
+  
   unique_ptr<SpinFunc>  potential;
   SpinFlipper          *spin_flipper = nullptr;
   if ( vm.count("potential") )
   {
+    // if n isn't set, then n=new_n, else check that n==new_n
     auto check_n = [&n](const uint new_n) {
       if (n==0) n=new_n;
       else      Assert_(n==new_n, n, new_n); };
@@ -1339,27 +1494,34 @@ int main(const int argc, char *argv[])
     
     if ( V_str == "s^4" ) {
       Assert_(J.size() == 1+1, J);
-      potential = make_s4_Potential(J[1], n);
-      if      (n==2) spin_flipper = &signed_permutation_flipper_2;
-      else if (n==3) spin_flipper = &signed_permutation_flipper_3;
-      else if (n==4) spin_flipper = &signed_permutation_flipper_4;
-      else           Assert_(false, n);
+      if      (n==2) { spin_flipper = &signed_permutation_flipper_2; potential.reset(new s4_Potential_<2>(J[1])); }
+      else if (n==3) { spin_flipper = &signed_permutation_flipper_3; potential.reset(new s4_Potential_<3>(J[1])); }
+      else if (n==4) { spin_flipper = &signed_permutation_flipper_4; potential.reset(new s4_Potential_<4>(J[1])); }
+      else             Assert_(false, n);
     } else if ( V_str.substr(0,3) == "cos" ) {
       check_n(2);
       Assert_(J.size() == 1+1, J);
       const uint m = from_string<uint>(V_str.substr(3));
-      potential = make_cos_Potential(J[1], m);
-      if      (m==2) spin_flipper = &cos2_flipper;
-      else if (m==3) spin_flipper = &cos3_flipper;
-      else if (m==4) spin_flipper = &cos4_flipper;
-      else if (m==6) spin_flipper = &cos6_flipper;
-      else if (m==8) spin_flipper = &cos8_flipper;
+      if      (m==2) { spin_flipper = &cos2_flipper; potential.reset(new cos_Potential_<2>(J[1])); }
+      else if (m==3) { spin_flipper = &cos3_flipper; potential.reset(new cos_Potential_<3>(J[1])); }
+      else if (m==4) { spin_flipper = &cos4_flipper; potential.reset(new cos_Potential_<4>(J[1])); }
+      else if (m==6) { spin_flipper = &cos6_flipper; potential.reset(new cos_Potential_<6>(J[1])); }
+      else if (m==8) { spin_flipper = &cos8_flipper; potential.reset(new cos_Potential_<8>(J[1])); }
       else           Assert_(false, m);
+    } else if ( V_str == "OnZ2Z2" ) {
+      Assert_(J.size() == 1+2, J);
+      if        (n==4) {
+        spin_flipper = new InvertSpin_OnZ2Z2_<2>(); // trivial memory leak
+        potential.reset(new OnZ2Z2_Potential_<2>(J[1], J[2]));
+      } else if (n==6) {
+        spin_flipper = new InvertSpin_OnZ2Z2_<3>(); // trivial memory leak
+        potential.reset(new OnZ2Z2_Potential_<3>(J[1], J[2]));
+      } else      Assert(false);
     } else if ( V_str == "vison square s-VBS" ) {
       check_n(4);
       Assert_(J.size() == 1+2, J);
       potential.reset(new VisonSquare_sVBS_Potential(J[1], J[2]));
-      Assert_(false, V_str);
+      Assert(false); // todo: spin flipper
     } else if ( V_str == "vison triangle c-VBS" ) {
       check_n(6);
       Assert_(J.size() == 1+2, J);
@@ -1380,7 +1542,10 @@ int main(const int argc, char *argv[])
   #endif
   
   Assert(J.size());
-  mc->J = J[0];
+  mc->_layered = vm.count("layered");
+  mc->J_ = J[0];
+  if ( J_anisotropy.size() )
+    mc->J_anisotropy = J_anisotropy;
   mc->set_update_method(update_method);
   mc->set_potential(potential.get(), potential_name);
   mc->set_flipper(spin_flipper);
