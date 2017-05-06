@@ -160,7 +160,7 @@ T from_string(const string &str, const bool fail_if_leftover_characters = true)
 uint64_t exp2i(uint x) { return uint64_t(1)<<x; }
 
 template<typename T>
-bool is_small(T x) { return abs(x) < sqrt(std::numeric_limits<T>::epsilon()); }
+bool is_small(T x) { return abs(x) <= sqrt(std::numeric_limits<T>::epsilon()); }
 
 template<typename T>
 constexpr T infinity() { return std::numeric_limits<T>::infinity(); }

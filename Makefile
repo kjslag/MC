@@ -2,7 +2,7 @@ CXX		= g++
 CXXFLAGS	= -pipe -g -std=c++11 -Isrc \
 -Wall -Wextra -Wstrict-aliasing=1 \
 -Wpedantic -Wshadow -Wdisabled-optimization \
--Wno-missing-braces -Wno-missing-field-initializers \
+-Wno-missing-braces -Wno-missing-field-initializers -Wno-unused-parameter \
 -O4 -march=native -ffast-math -fwhole-program -funsafe-loop-optimizations
 # -Wunsafe-loop-optimizations -Wstrict-overflow=5 -Wno-conversion
 # -fopt-info-optimized-missed=optinfo

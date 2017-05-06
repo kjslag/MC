@@ -230,7 +230,7 @@ public:
   virtual void normalize_spins() =0;
   
   virtual void set_flipper(SpinFlipper *flipper) =0;
-  void         set_potential(const SpinFunc *V, string potential_name) {
+  void         set_potential(SpinFunc *V, string potential_name) {
     _potential_name = potential_name;
     set_potential_func(V);
   }
@@ -266,7 +266,7 @@ public:
           if (n_ == 1)
             TIME(_t_global, global_update(!_thermalizing));
           else {
-            for (uint i=0; i<4; ++i) {
+            FOR(i,4) {
               if ( bool_dist(random_engine) )
                 TIME(_t_local,  local_update());
               else
@@ -284,6 +284,12 @@ public:
         normalize_spins(); // to prevent roundoff error
     }
     #undef TIME
+  }
+  
+  void warn(string warning)
+  {
+    std::cerr << "WARNING: " << warning << std::endl;
+    warnings.push_back('"' + warning + '"');
   }
   
   const Size         N; // number of spins
@@ -312,38 +318,33 @@ protected:
      _n_sweeps(0),
      _sweep_num(0),
      _sum_1(0,1),
-     _sum_a4(LongFloat(1.)/n_-sum_a4_sub(),1-sum_a4_sub()),
-     _sum_cos3(-1,+1),
-     _sum_OnZ2Z2_sigma2(0,.25),
-     _sum_OnZ2Z2_u(-sum_OnZ2Z2_u_sub(),.25-sum_OnZ2Z2_u_sub()),
-     _sum_OnZ2Z2_v(-sum_OnZ2Z2_v_sub(),.25-sum_OnZ2Z2_v_sub()),
-     _sum_tri_u(-LongFloat(1)/6,.5),
-     _sum_tri_v(-.25,+.25) // was mistakenly +/- 3*sqrt(LongFloat(3))/8 until Nov 24, 2013
+     _sum_2(0,1),
+     _sum_a4(LongFloat(1.)/n_-sum_a4_sub(),1-sum_a4_sub())
   { }
   
-  virtual void set_potential_func(const SpinFunc *V) =0;
+  virtual void set_potential_func(SpinFunc *V) =0;
   
   virtual void  local_update(bool allow_simple=true) =0;
   virtual void global_update(bool measure=false) =0;
   virtual void measure() =0;
   
   LongFloat sum_a4_sub()       const { return LongFloat(3)/(2+n_); }
-  LongFloat sum_OnZ2Z2_u_sub() const { return LongFloat(.25*n_)/(2+n_); }
-  LongFloat sum_OnZ2Z2_v_sub() const { return LongFloat(.5)/(2+n_); }
   LongFloat sum_tri_u_sub()    const { return .5; }
   
   UpdateMethod _update_method;
   
   std::uniform_int_distribution<Index> index_dist;
   
-  string           _potential_name;
-  bool             _thermalizing;
-  uint64_t         _thermalization, _annealing, _n_sweeps, _sweep_num;
-  Value            _sum_1, _sum_2, _sum_2_q1, _sum_2_q2, _sum_4, _sum_6, _sum_a4;
-  //, _sum_cos3, _sum_OnZ2Z2_sigma2, _sum_OnZ2Z2_sigma4, _sum_OnZ2Z2_u, _sum_OnZ2Z2_v, _sum_tri_u, _sum_tri_v;
-  Value            _n_measurement_clusters, _n_potential_clusters;
-  vector<Value>    _n_clusters;
-  Value            _t_local, _t_global, _t_measure;
+  string   _potential_name;
+  bool     _thermalizing;
+  uint64_t _thermalization, _annealing, _n_sweeps, _sweep_num;
+  
+  Value         _sum_1, _sum_2, _sum_2_q1, _sum_2_q2, _sum_4, _sum_6, _sum_a4;
+  Value         _n_measurement_clusters, _n_potential_clusters;
+  vector<Value> _n_clusters;
+  Value         _t_local, _t_global, _t_measure;
+
+  vector<string> warnings;
 };
 MC::~MC() {}
 
@@ -398,7 +399,7 @@ struct Spin_
   
   _float operator|(Spin_ s) const { _float x=0; FOR(a,n) x += _s[a]*s[a]; return x; } // dot product
   
-  _float norm() const { return sqrt(sq(_this)); }
+  _float norm() const { return sqrt(norm2(_this)); }
   
   void normalize() {
     if (n>1)
@@ -437,7 +438,7 @@ template<uint n, typename _float>
 Spin_<n,_float> operator/(Spin_<n,_float> s, _float x) { s *= 1/x; return s; }
 
 template<uint n, typename _float>
-_float sq(Spin_<n,_float> s) { return s|s; }
+_float norm2(Spin_<n,_float> s) { return s|s; }
 
 template<uint n, typename _float>
 ostream& operator<<(ostream &os, const Spin_<n,_float> &s)
@@ -495,18 +496,18 @@ struct InvertSpin_OnZ2Z2_ : public SpinFlipper_<2*n> {
   virtual void  flip_(Spin2 &s) const final
   {
     if ( flipN )
-      for (uint i=(flipN-1)*n; i<flipN*n; ++i)
-        s[i] = -s[i];
+      for (uint a=(flipN-1)*n; a<flipN*n; ++a)
+        s[a] = -s[a];
     
     if ( invertQ )
       for (uint i0=0; i0<=n; i0+=n) {
         // s_a += (-2*(s_a|r)) * r
         Float c = 0;
-        for (uint i=0; i<n; ++i)
-          c += s[i+i0]*r[i];
+        FOR(a, n)
+          c += s[a+i0]*r[a];
         c *= -2;
-        for (uint i=0; i<n; ++i)
-          s[i+i0] += c*r[i];
+        FOR(a, n)
+          s[a+i0] += c*r[a];
       }
   }
   
@@ -595,15 +596,31 @@ LongFloat tr(const SpinMatrix_<n> &M1, const SpinMatrix_<n> &M2) {
 struct SpinFunc {
   virtual ~SpinFunc();
   virtual vector<Float> coefficients() const =0;
+  
+  bool nonzero() const {
+    vector<Float> cs = coefficients();
+    for(Float c: cs)
+      if ( c != 0 )
+        return true;
+    return false;
+  }
+  
+  vector<string> measurement_names;
+  vector<Value>  measurements;
 };
 SpinFunc::~SpinFunc() {}
 
 template<uint n>
 struct SpinFunc_ : public SpinFunc {
-  typedef Spin_<n> Spin;
+  typedef Spin_<n,    Float> Spin;
+  typedef Spin_<n,LongFloat> SpinSum;
+  
   virtual ~SpinFunc_() {}
   virtual Float operator()(Spin s) const =0;
   virtual Spin ideal_spin() const = 0;
+  
+  struct MeasureArgs {SpinSum sum; LongFloat sum_4; const Spin *spins; MC::Size N;};
+  virtual void measure(MeasureArgs r) {}
   
   Spin ideal_spin_from(vector<Spin> &candidates) const
   {
@@ -641,19 +658,21 @@ struct s4_Potential_ : public SpinFunc_<n> {
 };
 
 // cos(m*theta)
-template<uint m, uint n, typename float_>
-float_ cos_potential(Spin_<n,float_> s) {
-  Assert(n==2);
+template<uint m, typename float_>
+float_ cos_potential(Spin_<2,float_> s) {
   complex<float_> z(s[0], s[1]);
   return real(Pow<m>(z));
 }
 
 template<uint m>
 struct cos_Potential_ : public SpinFunc_<2> {
-  typedef Spin_<2> Spin;
-  cos_Potential_(Float u_) : u(u_) {}
+  cos_Potential_(Float u_) : u(u_) {
+    measurement_names = {"S cos3"};
+    measurements.emplace_back(-1,+1);
+  }
   virtual Float operator()(Spin s) const final { return u*cos_potential<m>(s); }
   virtual vector<Float> coefficients() const final { return {u}; }
+  virtual void measure(MeasureArgs r) final { measurements[0].add(cos_potential<m>(r.sum)); }
   virtual Spin ideal_spin() const final
   { return u<0 ? array<Float,2>({1,0}) : array<Float,2>({cos(pi*m), sin(pi*m)}); }
   const Float u;
@@ -662,12 +681,11 @@ struct cos_Potential_ : public SpinFunc_<2> {
 template<uint n2, typename float_>
 pair<float_,float_> OnZ2Z2_potential(const Spin_<n2,float_> s) {
   const uint n = n2/2;
-  Assert(2*n == n2);
   float_ s1=0, s2=0, v_=0;
-  for (uint i=0; i<n; ++i) {
-    s1 += sq(s[i  ]);
-    s2 += sq(s[i+n]);
-    v_ += s[i]*s[i+n];
+  FOR(a, n) {
+    s1 += sq(s[a  ]);
+    s2 += sq(s[a+n]);
+    v_ += s[a]*s[a+n];
   }
   return std::make_pair(s1*s2, sq(v_));
 }
@@ -675,14 +693,39 @@ pair<float_,float_> OnZ2Z2_potential(const Spin_<n2,float_> s) {
 template<uint n>
 struct OnZ2Z2_Potential_ : public SpinFunc_<2*n> {
   typedef Spin_<2*n> Spin;
+  typedef typename SpinFunc_<2*n>::SpinSum SpinSum;
   
-  OnZ2Z2_Potential_(Float u_, Float v_) : u(u_), v(v_) {}
+  OnZ2Z2_Potential_(Float u_, Float v_) : u(u_), v(v_) {
+    this->measurement_names = {"S OnZ2Z2 u","S OnZ2Z2 v","S OnZ2Z2 |sigma|","S OnZ2Z2 sigma^2","S OnZ2Z2 sigma^4"};
+    this->measurements.emplace_back(-u_sub(), .25-u_sub());
+    this->measurements.emplace_back(-v_sub(), .25-v_sub());
+    this->measurements.emplace_back(0, 1);
+    this->measurements.emplace_back(0, 1);
+    this->measurements.emplace_back();
+  }
   
   virtual Float operator()(Spin s) const final {
     pair<Float,Float> V = OnZ2Z2_potential<2*n>(s);
     return u*V.first + v*V.second;
   }
   virtual vector<Float> coefficients() const final { return {u,v}; }
+  
+  virtual void measure(const typename SpinFunc_<2*n>::MeasureArgs r) final {
+    pair<LongFloat,LongFloat> V_uv = OnZ2Z2_potential(r.sum);
+    this->measurements[0].add(V_uv.first  - u_sub()*r.sum_4);
+    this->measurements[1].add(V_uv.second - v_sub()*r.sum_4);
+    
+    LongFloat sigma = 0;
+    FOR(i, r.N) FOR(a, n)
+      sigma += r.spins[i][a] * r.spins[i][a+n];
+    sigma *= LongFloat(2)/r.N;
+    LongFloat sigma2 =   sq(sigma ),
+              sigma1 = sqrt(sigma2),
+              sigma4 =   sq(sigma2);
+    this->measurements[2].add(sigma1);
+    this->measurements[3].add(sigma2);
+    this->measurements[4] <<  sigma4;
+  }
   
   virtual Spin ideal_spin() const final
   {
@@ -693,31 +736,47 @@ struct OnZ2Z2_Potential_ : public SpinFunc_<2*n> {
     return this->ideal_spin_from(candidates);
   }
   
+  static LongFloat u_sub() { return LongFloat(.25*n)/(1+n); }
+  static LongFloat v_sub() { return LongFloat(.25  )/(1+n); }
+  
   const Float u, v;
 };
 
+template<typename float_>
+pair<float_,float_> VisonSquare_sVBS_potential(Spin_<4,float_> s) {
+  FOR(a,4) s[a] = s[a]*s[a];
+  return std::make_pair( norm2(s), (s[0] + s[1])*(s[2] + s[3]) );
+}
+
 struct VisonSquare_sVBS_Potential : public SpinFunc_<4>
 {
-  typedef Spin_<4> Spin;
-  
-  VisonSquare_sVBS_Potential(Float u_, Float v_) : u(u_), v(v_) {}
+  VisonSquare_sVBS_Potential(Float u_, Float v_) : u(u_), v(v_) {
+    Assert(false); // todo
+    //measurement_names = {"S sq-sVBS u", "S sq-sVBS v"};
+  }
   
   virtual Float operator()(Spin s) const final {
-    FOR(a,4) s[a] = s[a]*s[a];
-    return   u*sq(s) + v*(s[0] + s[1])*(s[2] + s[3]);
+    auto V_uv = VisonSquare_sVBS_potential(s);
+    return   u*V_uv.first + v*V_uv.second;
   }
   
   virtual vector<Float> coefficients() const final { return {u,v}; }
+  
+  virtual void measure(MeasureArgs r) final {
+    Assert(false); // todo what are u_sub() and v_sub()?
+    //pair<LongFloat,LongFloat> V_uv = OnZ2Z2_potential(r.sum);
+    //measurements[0].add(V_uv.first  - u_sub()*r.sum_4);
+    //measurements[1].add(V_uv.second - v_sub()*r.sum_4);
+  }
   
   virtual Spin ideal_spin() const final { Assert(false); }
   
   const Float u, v;
 };
 
-template<uint n, typename float_>
-pair<float_,float_> visonTriangle_potential(const Spin_<n,float_> s) {
-  Assert(n==6);
-  Spin_<n,float_> s2;
+template<typename float_>
+pair<float_,float_> visonTriangle_potential(const Spin_<6,float_> s) {
+  Spin_<6,float_> s2;
   FOR(a,6) s2[a] = s[a]*s[a];
   return std::make_pair(
     sq(s2[0]+s2[1])     +     sq(s2[2]+s2[3])     +     sq(s2[4]+s2[5]),
@@ -726,9 +785,13 @@ pair<float_,float_> visonTriangle_potential(const Spin_<n,float_> s) {
 
 struct VisonTrianglePotential : public SpinFunc_<6>
 {
-  typedef Spin_<6> Spin;
-  
-  VisonTrianglePotential(Float u_, Float v_) : u(u_), v(v_) {}
+  VisonTrianglePotential(Float u_, Float v_) : u(u_), v(v_) {
+    measurement_names = {"S tri u","S tri v","S tri |sigma|","S tri sigma^2","S tri sigma^4"};
+    measurements.emplace_back(-LongFloat(1)/6, .5);
+    measurements.emplace_back(-.25, +.25); // was mistakenly +/- 3*sqrt(LongFloat(3))/8 until Nov 24, 2013
+    measurements.emplace_back(0, 1);
+    measurements.emplace_back();
+  }
   
   virtual Float operator()(Spin s) const final {
     pair<Float,Float> V = visonTriangle_potential(s);
@@ -736,6 +799,24 @@ struct VisonTrianglePotential : public SpinFunc_<6>
   }
   
   virtual vector<Float> coefficients() const final { return {u,v}; }
+  
+  virtual void measure(const MeasureArgs r) final {
+    pair<LongFloat,LongFloat> V_uv = visonTriangle_potential(r.sum);
+    measurements[0].add(V_uv.first  - u_sub()*r.sum_4);
+    measurements[1].add(V_uv.second);
+    
+    Spin_<3,LongFloat> sigma{}, one_vec{{1,1,1}};
+    FOR(i, r.N) FOR(a, 3)
+      sigma[a] += sq(r.spins[i][2*a]) + sq(r.spins[i][2*a+1]);
+    sigma *= LongFloat(1.5)/r.N;
+    sigma -= ((one_vec|sigma)/3) * one_vec;
+    LongFloat sigma2 = norm2(sigma ),
+              sigma1 =  sqrt(sigma2),
+              sigma4 =    sq(sigma2);
+    measurements[2].add(sigma1);
+    measurements[3].add(sigma2);
+    measurements[4] <<  sigma4;
+  }
   
   virtual Spin ideal_spin() const final
   {
@@ -750,6 +831,8 @@ struct VisonTrianglePotential : public SpinFunc_<6>
     };
     return ideal_spin_from(candidates);
   }
+  
+  static LongFloat u_sub() { return .5; }
   
   const Float u, v;
 };
@@ -851,7 +934,7 @@ public:
         s2 = n==1 ? -s1 : Spin::random();
         delta_E += -((s2-s1)|sum_nn);
       } else {
-        const Float norm = sq(sum_nn);
+        const Float norm = norm2(sum_nn);
         s2 = norm!=0 ? (2*(s1|sum_nn)/norm)*sum_nn - s1 : -s1;
       }
       
@@ -990,6 +1073,8 @@ public:
     
     if ( measure_ )
     {
+      check_thermalization();
+      
       typedef SpinMatrix_<n> SpinMatrix;
       static_assert( std::is_pod<SpinMatrix>::value, "SpinMatrix isn't POD" );
       
@@ -1018,8 +1103,8 @@ public:
         FOR(d, dim)
         if ( _use_q_dim[d] )
         FOR(cs, 2) {
-          sum_2_q1 += sq(_clusterSums_q[d][c][0+cs]);
-          sum_2_q2 += sq(_clusterSums_q[d][c][2+cs]);
+          sum_2_q1 += norm2(_clusterSums_q[d][c][0+cs]);
+          sum_2_q2 += norm2(_clusterSums_q[d][c][2+cs]);
         }
       }
       const SpinMatrix M2_2 = M2|M2;
@@ -1030,7 +1115,8 @@ public:
       N2      = sq(N1),
       N4      = sq(N2),
       N6      = N2*N4,
-      S1_     =    S1.norm(),
+      sum_2   = norm2(S1),
+      sum_1   = sqrt(sum_2),
       S2      = tr(M2),
       S4      = tr(M4),
       S_2_2   = tr(M2_2),
@@ -1039,8 +1125,8 @@ public:
       Q2_2    =   (Q2|Q2);
       
       LongFloat sum_4;
-      _sum_1   .add       (S1_);
-      _sum_2    <<         S2/N2;
+      _sum_1   .add       (sum_1);
+      _sum_2   .add       (S2/N2, sum_2);
       _sum_2_q1 <<         sum_2_q1 / (_n_q_dim*N2);
       _sum_2_q2 <<         sum_2_q2 / (_n_q_dim*N2);
       _sum_4    << (sum_4=(sq(S2) - 2*S4 + 2*S_2_2)/N4 );
@@ -1051,7 +1137,8 @@ public:
         
         _sum_a4.add(sum_a4, sum_a4_h);
       }
-      measure_potentials(S1, sum_4);
+    if (_V)
+      _V->measure({S1, sum_4, _spins.get(), N});
       
       _n_measurement_clusters << nClusters;
     }
@@ -1080,6 +1167,8 @@ public:
 protected:
   virtual void measure() final
   {
+    check_thermalization();
+    
     SpinSum sum{}, sum_q1[dim][2]{}, sum_q2[dim][2]{};
     FOR(i, N) {
       const Pos p = pos(i);
@@ -1103,15 +1192,15 @@ protected:
     
     const LongFloat
     N2 = sq(N1),
-    sum_2 = sq(sum),
-    sum_4 = sq(sum_2);
+    sum_2 = norm2(sum),
+    sum_4 =    sq(sum_2);
     
     LongFloat sum_2_q1=0, sum_2_q2=0;
     FOR(d, dim)
       if ( _use_q_dim[d] )
         FOR(cs, 2) {
-          sum_2_q1 += sq(sum_q1[d][cs]);
-          sum_2_q2 += sq(sum_q2[d][cs]);
+          sum_2_q1 += norm2(sum_q1[d][cs]);
+          sum_2_q2 += norm2(sum_q2[d][cs]);
         }
     sum_2_q1 /= _n_q_dim*N2;
     sum_2_q2 /= _n_q_dim*N2;
@@ -1119,33 +1208,15 @@ protected:
     const LongFloat sum_1 = sqrt(sum_2);
     
     _sum_1   .add       (sum_1);
-    _sum_2    <<         sum_2;
+    _sum_2   .add       (sum_2);
     _sum_2_q1 <<         sum_2_q1;
     _sum_2_q2 <<         sum_2_q2;
     _sum_4    <<         sum_4;
     _sum_6    <<  Pow<3>(sum_2);
     if (n > 1)
       _sum_a4.add( s4_potential(sum) - sum_a4_sub()*sum_4 );
-    measure_potentials(sum, sum_4);
-  }
-  
-  void measure_potentials(const SpinSum S1, const LongFloat sum_4)
-  {
-    if ( dynamic_cast<const cos_Potential_<3>*>(_V) )
-      _sum_cos3.add( cos_potential<3>(S1) );
-    if ( dynamic_cast<const OnZ2Z2_Potential_<n/2>*>(_V) ) {
-      pair<LongFloat,LongFloat> V_uv = OnZ2Z2_potential(S1);
-      _sum_OnZ2Z2_u     .add( V_uv.first  - sum_OnZ2Z2_u_sub()*sum_4 );
-      _sum_OnZ2Z2_v     .add( V_uv.second - sum_OnZ2Z2_v_sub()*sum_4 );
-      _sum_OnZ2Z2_sigma2.add( V_uv.first );
-      _sum_OnZ2Z2_sigma4 << sq(V_uv.first);
-    }
-    if ( dynamic_cast<const VisonTrianglePotential*>(_V) ) {
-      // TODO improved estimators
-      pair<LongFloat,LongFloat> V_uv = visonTriangle_potential(S1);
-      _sum_tri_u.add( V_uv.first - sum_tri_u_sub()*sum_4 );
-      _sum_tri_v.add( V_uv.second );
-    }
+    if (_V)
+      _V->measure({sum, sum_4, _spins.get(), N});
   }
   
   Float anneal(Float delta_E) const {
@@ -1194,6 +1265,21 @@ protected:
     }
   }
   
+  void check_thermalization()
+  {
+    if ( _check_thermalization ) {
+      _check_thermalization = false;
+      uint count = 0;
+      if ( _init_temp == InitTemp::low && _V && _V->nonzero() ) {
+        const Float V_min = V(_V->ideal_spin()) + sqrt(std::numeric_limits<Float>::epsilon());
+        FOR(i, N)
+          count += V(_spins[i]) <= V_min;
+      }
+      if ( count )
+        warn("un-thermalized spins: " + stringify(count));
+    }
+  }
+  
   MC_(const array<uint,dim> &L__, const vector<uint> &L_v, Size N_)
     : MC(N_, L_v, n),
       L(L__),
@@ -1209,7 +1295,8 @@ protected:
      _V(nullptr),
      _init_temp(InitTemp::none),
      _setup(true),
-     _setup_global_update(true)
+     _setup_global_update(true),
+     _check_thermalization(true)
   {
     set_flipper(nullptr);
     
@@ -1222,9 +1309,9 @@ protected:
     }
   }
   
-  virtual void set_potential_func(const SpinFunc *new_V) final
+  virtual void set_potential_func(SpinFunc *new_V) final
   {
-    _V = dynamic_cast<const SpinFunc_<n>*>(new_V);
+    _V = dynamic_cast<SpinFunc_<n>*>(new_V);
     
     if (new_V)
       Assert_(_V, n);
@@ -1250,10 +1337,10 @@ private:
   
   InvertSpin_<n>      _wolff_flipper;
   SpinFlipper_<n>    *_flipper;
-  const SpinFunc_<n> *_V;
+  SpinFunc_<n>       *_V;
   
   InitTemp _init_temp;
-  bool _setup, _setup_global_update;
+  bool _setup, _setup_global_update, _check_thermalization;
 };
 
 bool __brief_values = false;
@@ -1287,18 +1374,19 @@ ostream& operator<<(ostream &os, const MC &mc)
         "\"S^2_q2"            "\" -> "   << mc._sum_2_q2                <<   ",\n"
         "\"S^4"               "\" -> "   << mc._sum_4                   <<   ",\n"
         "\"S^6"               "\" -> "   << mc._sum_6                   <<   ",\n";
-  if ( mc._sum_a4      .n_samples() )
+  if ( mc._sum_a4.n_samples() )
     os<<"\"Sa^4"              "\" -> "   << mc._sum_a4                  <<   ",\n"; // should =0 if O(n) symmetry
-  if ( mc._sum_OnZ2Z2_u.n_samples() )
-    os<<"\"S OnZ2Z2 sigma^2"  "\" -> "   << mc._sum_OnZ2Z2_sigma2       <<   ",\n"
-        "\"S OnZ2Z2 sigma^4"  "\" -> "   << mc._sum_OnZ2Z2_sigma4       <<   ",\n"
-        "\"S OnZ2Z2 u"        "\" -> "   << mc._sum_OnZ2Z2_u            <<   ",\n"
-        "\"S OnZ2Z2 v"        "\" -> "   << mc._sum_OnZ2Z2_v            <<   ",\n"; // should =0 if O(n) symmetry
-  if ( mc._sum_cos3    .n_samples() )
-    os<<"\"S cos3"            "\" -> "   << mc._sum_cos3                <<   ",\n";
-  if ( mc._sum_tri_u   .n_samples() )
-    os<<"\"S tri u"           "\" -> "   << mc._sum_tri_u               <<   ",\n"  // should =0 if O(n) symmetry
-        "\"S tri v"           "\" -> "   << mc._sum_tri_v               <<   ",\n"; // should =0 if O(n) symmetry
+  
+  if (potential) {
+    const uint n = potential->measurements.size();
+    Assert( potential->measurement_names.size() == n );
+    FOR(i, n)
+      os << '"' << potential->measurement_names[i] << "\" -> " << potential->measurements[i] << ",\n";
+  }
+  
+  if ( mc.warnings.size() )
+    os << "\"warnings\" -> " << mc.warnings << ",\n";
+  
   Value::brief = true;
   os << "\"measurement clusters\" -> "   << mc._n_measurement_clusters  <<   ",\n"
         "\"potential clusters""\" -> "   << mc._n_potential_clusters    <<   ",\n"

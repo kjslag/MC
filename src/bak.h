@@ -38,6 +38,25 @@ virtual Spin ideal_spin() const final
       _sum_tri_u.add( V_uv.first - sum_tri_u_sub()*sum_4 );
       _sum_tri_v.add( V_uv.second );
     }
+//   void measure_potentials(const SpinSum S1, const LongFloat sum_4)
+//   {
+//     _V->measure()
+// //     if ( dynamic_cast<const cos_Potential_<3>*>(_V) )
+// //       _sum_cos3.add( cos_potential<3>(S1) );
+// //     if ( dynamic_cast<const OnZ2Z2_Potential_<n/2>*>(_V) ) {
+// //       pair<LongFloat,LongFloat> V_uv = OnZ2Z2_potential(S1);
+// //       _sum_OnZ2Z2_u     .add( V_uv.first  - sum_OnZ2Z2_u_sub()*sum_4 );
+// //       _sum_OnZ2Z2_v     .add( V_uv.second - sum_OnZ2Z2_v_sub()*sum_4 );
+// //       _sum_OnZ2Z2_sigma2.add( V_uv.first );
+// //       _sum_OnZ2Z2_sigma4 << sq(V_uv.first);
+// //     }
+// //     if ( dynamic_cast<const VisonTrianglePotential*>(_V) ) {
+// //       // TODO improved estimators
+// //       pair<LongFloat,LongFloat> V_uv = visonTriangle_potential(S1);
+// //       _sum_tri_u.add( V_uv.first - sum_tri_u_sub()*sum_4 );
+// //       _sum_tri_v.add( V_uv.second );
+// //     }
+//   }
 
 template<uint n>
 struct ExternalFieldPotential_ : public SpinFunc_<n>
