@@ -1,5 +1,5 @@
 CXX		= g++
-CXXFLAGS	= -pipe -g -std=c++11 -Isrc \
+CXXFLAGS	= -pipe -g -std=gnu++14 -Isrc \
 -Wall -Wextra -Wstrict-aliasing=1 \
 -Wpedantic -Wshadow -Wdisabled-optimization \
 -Wno-missing-braces -Wno-missing-field-initializers -Wno-unused-parameter \
@@ -14,7 +14,7 @@ LDFLAGS		= -lm -lboost_program_options
 
 all: MC
 
-MC: src/MC.cpp src/util.hh src/SpinOperatorData.hh
+MC: src/MC.cpp src/util.hh
 	$(CXX) $< -o $@ $(CXXFLAGS) $(LDFLAGS) -DDEBUG
 
 # valgrind --tool=callgrind  ./MC

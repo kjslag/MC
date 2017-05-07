@@ -179,7 +179,7 @@ istream& operator>>(istream &is, IO_float<F> &f)
   F x;
   if (is >> x)
   {
-    if ( is.peek() == '/' ) {
+    if ( is.peek() == '/' || is.peek() == '%' ) {
       char c;
       F y;
       if (is >> c >> y)
