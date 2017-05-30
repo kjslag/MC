@@ -324,7 +324,10 @@ protected:
      _n_sweeps(0),
      _sweep_num(0),
      _sum_1(0,1),
-     _sum_2(0,1)
+     _sum_2(0,1),
+     _sum_2AF(0,1),
+     _sumSS_2(0,1),
+     _sumSS_2b(0,1)
   { }
   
   virtual void set_potential_func(SpinFunc *V) =0;
@@ -342,7 +345,8 @@ protected:
   bool     _thermalizing;
   uint64_t _thermalization, _annealing, _n_sweeps, _sweep_num;
   
-  Value         _sum_1, _sum_2, _sum_2_q1, _sum_2_q2, _sum_4, _sum_6;
+  Value         _sum_1, _sum_2, _sum_2AF, _sum_2_q1, _sum_2_q2, _sum_4, _sum_6;
+  Value         _sumSS_2, _sumSS_2b, _sumSS_2_q1, _sumSS_2_q2, _sumSS_2b_q1, _sumSS_2b_q2;
   Value         _n_measurement_clusters, _n_potential_clusters;
   vector<Value> _n_clusters;
   Value         _t_local, _t_global, _t_measure;
@@ -770,12 +774,13 @@ public:
       
       #define sum_cluster_q_(op, i, p) \
         do { \
-          _clusterSums[nClusters] op (s); \
+          _clusterSums  [nClusters] op (s); \
+          _clusterSumsAF[nClusters] op ((i%2) ? s : -s); \
            \
           FOR(d, dim) \
           if ( _use_q_dim[d] ) { \
             const uint x1 =    p[d]; \
-            const uint x2 = (2*p[d])%L[_layer_dims]; \
+            const uint x2 = (2*p[d])%L[d]; \
             _clusterSums_q[d][nClusters][0] op (_cos[x1] * s); \
             _clusterSums_q[d][nClusters][1] op (_sin[x1] * s); \
             _clusterSums_q[d][nClusters][2] op (_cos[x2] * s); \
@@ -854,16 +859,19 @@ public:
       
       for (uint c=0; c<nClusters; )
       {
-        LongFloat  S6=0, S4_1=0;
-        SpinSum    S1{}, Q2{};
+        LongFloat  S6=0, S4_1=0, S2AF=0;
+        SpinSum    S1{}, S1AF{}, Q2{};
         SpinMatrix M2{}, M4{};
         LongFloat  sum_2_q1=0, sum_2_q2=0;
         const Pos p0 = _clusterLayers[c];
         while (true) {
-          const SpinSum   s  = _clusterSums[c];
-          const LongFloat s2 = s|s;
+          const SpinSum   s   = _clusterSums[c],
+                          sAF = _clusterSumsAF[c];
+          const LongFloat s2  = s|s;
           
-          S1 += s;
+          S1   += s;
+          S1AF += sAF;
+          S2AF += sAF|sAF;
           S6 += Pow<3>(s2);
           FOR(a, n) {
             if ( n > 1 ) {
@@ -896,12 +904,14 @@ public:
         LongFloat N1 = 1;
         for (uint d=_layer_dims; d<dim; ++d)
           N1 *= L[d];
-        S1 /= N1;
+        S1   /= N1;
+        S1AF /= N1;
         const LongFloat
         N2      = sq(N1),
         N4      = sq(N2),
         N6      = N2*N4,
         sum_2   = norm2(S1),
+        sum_2AF = norm2(S1AF),
         sum_1   = sqrt(sum_2),
         S2      = tr(M2),
         S4      = tr(M4),
@@ -911,13 +921,16 @@ public:
         
         LongFloat sum_4;
         _sum_1   .add       (sum_1);
-        _sum_2   .add       (S2/N2, sum_2);
+        _sum_2   .add       (S2  /N2, sum_2);
+        _sum_2AF .add       (S2AF/N2, sum_2AF);
         _sum_2_q1 <<         sum_2_q1 / (_n_q_dim*N2);
         _sum_2_q2 <<         sum_2_q2 / (_n_q_dim*N2);
         _sum_4    << (sum_4=(sq(S2) - 2*S4 + 2*S_2_2)/N4 );
         _sum_6    <<        (Pow<3>(S2) - 6*S2*S4 + 16*S6 + 6*S2*S_2_2 - 24*S_4_2 + 8*S_2_2_2)/N6;
         if (_V)
           _V->measure({S1, sum_4, _spins.get(), N});
+        
+        measureSS();
       }
       
       _n_measurement_clusters << nClusters;
@@ -945,24 +958,108 @@ public:
   Float V(Spin s) const { return (*_V)(s); }
   
 protected:
+  void measureSS()
+  {
+    LongFloat sumSS=0, sumSSb=0, sumSS_q1[dim][dim][2]{}, sumSS_q2[dim][dim][2]{};
+    FOR(i, N) {
+      const Pos p = pos(i);
+      const Spin s = _spins[i];
+      
+      FOR(d0, dim)
+      if (L[d0] == L[0] || L[d0] == L[_layer_dims]) {
+        Pos p2 = p;
+        p2[d0] = mod_d(p2[d0] + 1, d0);
+        const Spin s2 = _spins[index(p2)];
+        
+        const Float ss = s|s2;
+        if (d0 < _layer_dims)
+          sumSS += ss; // TODO should actually be split by layer
+        else
+          sumSSb += ss;
+        
+        FOR(d, dim)
+        if ( (d0 < _layer_dims && _use_q_dim[d]) || (d0 >= _layer_dims && d < _layer_dims) ) {
+          const uint x1 =    p[d];
+          const uint x2 = (2*p[d])%L[d];
+          sumSS_q1[d0][d][0] += _cos[x1] * ss;
+          sumSS_q1[d0][d][1] += _sin[x1] * ss;
+          sumSS_q2[d0][d][0] += _cos[x2] * ss;
+          sumSS_q2[d0][d][1] += _sin[x2] * ss;
+        }
+      }
+    }
+    LongFloat N1=0, N1b=0;
+    FOR(d0, _layer_dims)
+    if (L[d0] == L[0])
+      ++N1;
+    for (uint d0=_layer_dims; d0<dim; ++d0)
+    if (L[d0] == L[_layer_dims])
+      ++N1b;
+    N1  *= N;
+    N1b *= N;
+    sumSS  /= N1;
+    sumSSb /= N1b;
+    
+    const LongFloat
+    N2 = sq(N1),
+    sumSS_2  = sumSS *sumSS,
+    sumSS_2b = sumSSb*sumSSb;
+    
+    LongFloat  sumSS_2_q1=0,  sumSS_2_q2=0,  nSS_q_dim=0;
+    LongFloat sumSS_2b_q1=0, sumSS_2b_q2=0, nSSb_q_dim=0;
+    FOR(d0, _layer_dims)
+    if (L[d0] == L[0])
+    for (uint d=_layer_dims; d<dim; ++d)
+    if (_use_q_dim[d])
+    {
+      ++nSS_q_dim;
+      FOR(cs, 2) {
+        sumSS_2_q1 += sq(sumSS_q1[d0][d][cs]);
+        sumSS_2_q2 += sq(sumSS_q2[d0][d][cs]);
+      }
+    }
+    for (uint d0=_layer_dims; d0<dim; ++d0)
+    if (L[d0] == L[_layer_dims])
+    FOR(d, _layer_dims)
+    {
+      ++nSSb_q_dim;
+      FOR(cs, 2) {
+        sumSS_2b_q1 += sq(sumSS_q1[d0][d][cs]);
+        sumSS_2b_q2 += sq(sumSS_q2[d0][d][cs]);
+      }
+    }
+    sumSS_2_q1  /=  nSS_q_dim*N2;
+    sumSS_2_q2  /=  nSS_q_dim*N2;
+    sumSS_2b_q1 /= nSSb_q_dim*N2;
+    sumSS_2b_q2 /= nSSb_q_dim*N2;
+    
+    _sumSS_2    .add(sumSS_2);
+    _sumSS_2b   .add(sumSS_2b);
+    _sumSS_2_q1  <<  sumSS_2_q1;
+    _sumSS_2_q2  <<  sumSS_2_q2;
+    _sumSS_2b_q1 <<  sumSS_2b_q1;
+    _sumSS_2b_q2 <<  sumSS_2b_q2;
+  }
+  
   virtual void measure() final
   {
     check_thermalization();
     
-    SpinSum sum{}, sum_q1[dim][2]{}, sum_q2[dim][2]{};
+    SpinSum sum{}, sumAF{}, sum_q1[dim][2]{}, sum_q2[dim][2]{};
     FOR(i, N) {
       const Pos p = pos(i);
       bool sumQ = true;
-      for (uint d=0; d<_layer_dims; ++d)
+      FOR(d, _layer_dims)
         sumQ = sumQ && p[d]==0;
       if ( sumQ ) { // this could be factored into the FOR(i, N) loop
         const Spin s = _spins[i];
         sum += s;
+        sumAF += i%2 ? s : -s;
         
         FOR(d, dim)
         if ( _use_q_dim[d] ) {
           const uint x1 =    p[d];
-          const uint x2 = (2*p[d])%L[_layer_dims];
+          const uint x2 = (2*p[d])%L[d];
           sum_q1[d][0] += _cos[x1] * s;
           sum_q1[d][1] += _sin[x1] * s;
           sum_q2[d][0] += _cos[x2] * s;
@@ -974,11 +1071,13 @@ protected:
     for (uint d=_layer_dims; d<dim; ++d)
       N1 *= L[d];
     sum /= N1;
+    sumAF /= N1;
     
     const LongFloat
     N2 = sq(N1),
-    sum_2 = norm2(sum),
-    sum_4 =    sq(sum_2);
+    sum_2   = norm2(sum),
+    sum_2AF = norm2(sumAF),
+    sum_4   =    sq(sum_2);
     
     LongFloat sum_2_q1=0, sum_2_q2=0;
     FOR(d, dim)
@@ -994,12 +1093,15 @@ protected:
     
     _sum_1   .add       (sum_1);
     _sum_2   .add       (sum_2);
+    _sum_2AF .add       (sum_2AF);
     _sum_2_q1 <<         sum_2_q1;
     _sum_2_q2 <<         sum_2_q2;
     _sum_4    <<         sum_4;
     _sum_6    <<  Pow<3>(sum_2);
     if (_V)
       _V->measure({sum, sum_4, _spins.get(), N});
+    
+    measureSS();
   }
   
   Float anneal(Float delta_E) const {
@@ -1078,7 +1180,8 @@ protected:
      _spins(new Spin[N_]),
      _newIndexStack(new Index[N_]),
      _clusterLayers(new Pos[N_]),
-     _clusterSums(new SpinSum[N_]),
+     _clusterSums  (new SpinSum[N_]),
+     _clusterSumsAF(new SpinSum[N_]),
      _n_q_dim(0),
      _use_q_dim{},
      _cluster_indices(new Index[N_]),
@@ -1115,7 +1218,7 @@ private:
   vector<bool>                   _cluster;
   const unique_ptr<Index[]>      _newIndexStack;
   const unique_ptr<Pos[]>        _clusterLayers;
-  const unique_ptr<SpinSum[]>    _clusterSums;
+  const unique_ptr<SpinSum[]>    _clusterSums, _clusterSumsAF;
   unique_ptr<array<SpinSum,4>[]> _clusterSums_q[dim]; // 4 = #(q1, q2) * #(cos, sin)
   uint                           _n_q_dim;
   bool                           _use_q_dim[dim];
@@ -1162,6 +1265,13 @@ ostream& operator<<(ostream &os, const MC &mc)
         "\"S^2"               "\" -> "   << mc._sum_2                   <<   ",\n"
         "\"S^2_q1"            "\" -> "   << mc._sum_2_q1                <<   ",\n"
         "\"S^2_q2"            "\" -> "   << mc._sum_2_q2                <<   ",\n"
+        "\"S^2 AF"            "\" -> "   << mc._sum_2AF                 <<   ",\n"
+        "\"SS^2"              "\" -> "   << mc._sumSS_2                 <<   ",\n"
+        "\"SS^2_q1"           "\" -> "   << mc._sumSS_2_q1              <<   ",\n"
+        "\"SS^2_q2"           "\" -> "   << mc._sumSS_2_q2              <<   ",\n"
+        "\"SS^2b"             "\" -> "   << mc._sumSS_2b                <<   ",\n"
+        "\"SS^2b_q1"          "\" -> "   << mc._sumSS_2b_q1             <<   ",\n"
+        "\"SS^2b_q2"          "\" -> "   << mc._sumSS_2b_q2             <<   ",\n"
         "\"S^4"               "\" -> "   << mc._sum_4                   <<   ",\n"
         "\"S^6"               "\" -> "   << mc._sum_6                   <<   ",\n";
   
