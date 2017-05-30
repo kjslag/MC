@@ -649,6 +649,14 @@ public:
     return p;
   }
   
+  bool AF_signQ(Pos p) const
+  {
+    int tot = 0;
+    for (uint d=_layer_dims; d<dim; ++d)
+      tot += p[d];
+    return tot % 2;
+  }
+  
   uint mod_d(uint x, uint d) const { return (x + L[d]) % L[d]; }
   
   NearestNeighbors nearestNeighbors(const Pos p) const
@@ -775,7 +783,7 @@ public:
       #define sum_cluster_q_(op, i, p) \
         do { \
           _clusterSums  [nClusters] op (s); \
-          _clusterSumsAF[nClusters] op ((i%2) ? s : -s); \
+          _clusterSumsAF[nClusters] op (AF_signQ(p) ? s : -s); \
            \
           FOR(d, dim) \
           if ( _use_q_dim[d] ) { \
@@ -960,74 +968,74 @@ public:
 protected:
   void measureSS()
   {
-    LongFloat sumSS=0, sumSSb=0, sumSS_q1[dim][dim][2]{}, sumSS_q2[dim][dim][2]{};
+    if (!(0 < _layer_dims &&_layer_dims < dim))
+      return;
+    
+    LongFloat sumSS[dim]{}, sumSS_q1[dim][dim][2]{}, sumSS_q2[dim][dim][2]{};
     FOR(i, N) {
       const Pos p = pos(i);
       const Spin s = _spins[i];
       
       FOR(d0, dim)
-      if (L[d0] == L[0] || L[d0] == L[_layer_dims]) {
+      if ((d0 < _layer_dims && L[d0] == L[0]) || _use_q_dim[d0]) {
         Pos p2 = p;
         p2[d0] = mod_d(p2[d0] + 1, d0);
         const Spin s2 = _spins[index(p2)];
         
         const Float ss = s|s2;
-        if (d0 < _layer_dims)
-          sumSS += ss; // TODO should actually be split by layer
-        else
-          sumSSb += ss;
+        sumSS[d0] += ss; // TODO should actually be split by layer when d0 < _layer_dims
         
         FOR(d, dim)
-        if ( (d0 < _layer_dims && _use_q_dim[d]) || (d0 >= _layer_dims && d < _layer_dims) ) {
+        if ( (d0 < _layer_dims && _use_q_dim[d]) || (d0 >= _layer_dims && d < _layer_dims && L[d] == L[0]) ) {
           const uint x1 =    p[d];
           const uint x2 = (2*p[d])%L[d];
-          sumSS_q1[d0][d][0] += _cos[x1] * ss;
-          sumSS_q1[d0][d][1] += _sin[x1] * ss;
-          sumSS_q2[d0][d][0] += _cos[x2] * ss;
-          sumSS_q2[d0][d][1] += _sin[x2] * ss;
+          const Float *cos_ = d < _layer_dims ? _cos0.get() : _cos.get(),
+                      *sin_ = d < _layer_dims ? _sin0.get() : _sin.get();
+          sumSS_q1[d0][d][0] += cos_[x1] * ss;
+          sumSS_q1[d0][d][1] += sin_[x1] * ss;
+          sumSS_q2[d0][d][0] += cos_[x2] * ss;
+          sumSS_q2[d0][d][1] += sin_[x2] * ss;
         }
       }
     }
-    LongFloat N1=0, N1b=0;
-    FOR(d0, _layer_dims)
-    if (L[d0] == L[0])
-      ++N1;
-    for (uint d0=_layer_dims; d0<dim; ++d0)
-    if (L[d0] == L[_layer_dims])
-      ++N1b;
-    N1  *= N;
-    N1b *= N;
-    sumSS  /= N1;
-    sumSSb /= N1b;
     
-    const LongFloat
-    N2 = sq(N1),
-    sumSS_2  = sumSS *sumSS,
-    sumSS_2b = sumSSb*sumSSb;
-    
+    LongFloat nSS=0, nSSb=0;
+    LongFloat  sumSS_2=0, sumSS_2b=0;
     LongFloat  sumSS_2_q1=0,  sumSS_2_q2=0,  nSS_q_dim=0;
     LongFloat sumSS_2b_q1=0, sumSS_2b_q2=0, nSSb_q_dim=0;
     FOR(d0, _layer_dims)
     if (L[d0] == L[0])
-    for (uint d=_layer_dims; d<dim; ++d)
-    if (_use_q_dim[d])
     {
-      ++nSS_q_dim;
-      FOR(cs, 2) {
-        sumSS_2_q1 += sq(sumSS_q1[d0][d][cs]);
-        sumSS_2_q2 += sq(sumSS_q2[d0][d][cs]);
+      ++nSS;
+      sumSS_2 += sq(sumSS[d0]);
+      for (uint d=_layer_dims; d<dim; ++d)
+      if (_use_q_dim[d])
+      {
+        ++nSS_q_dim;
+        FOR(cs, 2) {
+          sumSS_2_q1 += sq(sumSS_q1[d0][d][cs]);
+          sumSS_2_q2 += sq(sumSS_q2[d0][d][cs]);
+        }
       }
     }
     for (uint d0=_layer_dims; d0<dim; ++d0)
-    if (L[d0] == L[_layer_dims])
-    FOR(d, _layer_dims)
+    if (_use_q_dim[d0])
     {
-      ++nSSb_q_dim;
-      FOR(cs, 2) {
-        sumSS_2b_q1 += sq(sumSS_q1[d0][d][cs]);
-        sumSS_2b_q2 += sq(sumSS_q2[d0][d][cs]);
+      ++nSSb;
+      sumSS_2b += sq(sumSS[d0]);
+      FOR(d, _layer_dims)
+      if (L[d] == L[0])
+      {
+        ++nSSb_q_dim;
+        FOR(cs, 2) {
+          sumSS_2b_q1 += sq(sumSS_q1[d0][d][cs]);
+          sumSS_2b_q2 += sq(sumSS_q2[d0][d][cs]);
+        }
       }
     }
+    const LongFloat N2 = sq(N);
+    sumSS_2     /= nSS *sq(N);
+    sumSS_2b    /= nSSb*sq(N);
     sumSS_2_q1  /=  nSS_q_dim*N2;
     sumSS_2_q2  /=  nSS_q_dim*N2;
     sumSS_2b_q1 /= nSSb_q_dim*N2;
@@ -1054,7 +1062,7 @@ protected:
       if ( sumQ ) { // this could be factored into the FOR(i, N) loop
         const Spin s = _spins[i];
         sum += s;
-        sumAF += i%2 ? s : -s;
+        sumAF += AF_signQ(p) ? s : -s;
         
         FOR(d, dim)
         if ( _use_q_dim[d] ) {
@@ -1132,6 +1140,13 @@ protected:
     FOR(x, L[_layer_dims]) {
       _cos[x] = cos((2*pi*x)/L[_layer_dims]);
       _sin[x] = sin((2*pi*x)/L[_layer_dims]);
+    }
+    
+    _cos0.reset(new Float[L[0]]);
+    _sin0.reset(new Float[L[0]]);
+    FOR(x, L[0]) {
+      _cos0[x] = cos((2*pi*x)/L[0]);
+      _sin0[x] = sin((2*pi*x)/L[0]);
     }
     
     _setup = false;
@@ -1223,7 +1238,7 @@ private:
   uint                           _n_q_dim;
   bool                           _use_q_dim[dim];
   unique_ptr<Index[]>            _cluster_indices;
-  unique_ptr<Float[]>            _cos, _sin;
+  unique_ptr<Float[]>            _cos, _sin, _cos0, _sin0;
   
   InvertSpin_<n>      _wolff_flipper;
   SpinFlipper_<n>    *_flipper;
@@ -1262,17 +1277,19 @@ ostream& operator<<(ostream &os, const MC &mc)
         "\"thermalization"    "\" -> "   << mc._thermalization          <<   ",\n"
         "\"annealing"         "\" -> "   << mc._annealing               <<   ",\n"
         "\"|S|"               "\" -> "   << mc._sum_1                   <<   ",\n"
-        "\"S^2"               "\" -> "   << mc._sum_2                   <<   ",\n"
-        "\"S^2_q1"            "\" -> "   << mc._sum_2_q1                <<   ",\n"
-        "\"S^2_q2"            "\" -> "   << mc._sum_2_q2                <<   ",\n"
-        "\"S^2 AF"            "\" -> "   << mc._sum_2AF                 <<   ",\n"
-        "\"SS^2"              "\" -> "   << mc._sumSS_2                 <<   ",\n"
+        "\"S^2"               "\" -> "   << mc._sum_2                   <<   ",\n";
+  if ( mc._layer_dims < mc.L_.size() )
+  os << "\"S^2_q1"            "\" -> "   << mc._sum_2_q1                <<   ",\n"
+        "\"S^2_q2"            "\" -> "   << mc._sum_2_q2                <<   ",\n";
+  os << "\"S^2 AF"            "\" -> "   << mc._sum_2AF                 <<   ",\n";
+  if ( 0 < mc._layer_dims && mc._layer_dims < mc.L_.size() )
+  os << "\"SS^2"              "\" -> "   << mc._sumSS_2                 <<   ",\n"
         "\"SS^2_q1"           "\" -> "   << mc._sumSS_2_q1              <<   ",\n"
         "\"SS^2_q2"           "\" -> "   << mc._sumSS_2_q2              <<   ",\n"
         "\"SS^2b"             "\" -> "   << mc._sumSS_2b                <<   ",\n"
         "\"SS^2b_q1"          "\" -> "   << mc._sumSS_2b_q1             <<   ",\n"
-        "\"SS^2b_q2"          "\" -> "   << mc._sumSS_2b_q2             <<   ",\n"
-        "\"S^4"               "\" -> "   << mc._sum_4                   <<   ",\n"
+        "\"SS^2b_q2"          "\" -> "   << mc._sumSS_2b_q2             <<   ",\n";
+  os << "\"S^4"               "\" -> "   << mc._sum_4                   <<   ",\n"
         "\"S^6"               "\" -> "   << mc._sum_6                   <<   ",\n";
   
   if (potential) {
