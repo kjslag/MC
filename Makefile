@@ -1,5 +1,5 @@
 CXX		= g++
-CXXFLAGS	= -pipe -g -std=gnu++14 -Isrc \
+CXXFLAGS	= -pipe -std=gnu++14 -Isrc \
 -Wall -Wextra -Wstrict-aliasing=1 \
 -Wpedantic -Wshadow -Wdisabled-optimization \
 -Wno-missing-braces -Wno-missing-field-initializers -Wno-unused-parameter \

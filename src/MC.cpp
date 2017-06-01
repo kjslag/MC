@@ -14,7 +14,7 @@ long double debug_num = 0;
 
 typedef IO_float<Float> IOFloat;
 
-constexpr Float pi = boost::math::constants::pi<Float>();
+const Float pi = boost::math::constants::pi<Float>();
 
 // random
 
@@ -580,6 +580,8 @@ struct SpinFunc {
 };
 SpinFunc::~SpinFunc() {}
 
+const bool measureSSQ = true;
+
 template<uint n>
 struct SpinFunc_ : public SpinFunc {
   typedef Spin_<n,    Float> Spin;
@@ -967,7 +969,7 @@ public:
 protected:
   void measureSS()
   {
-    if (!(0 < _layer_dims &&_layer_dims < dim))
+    if (!(0 < _layer_dims &&_layer_dims < dim && measureSSQ))
       return;
     
     uint Ni = 1;
@@ -1287,7 +1289,7 @@ ostream& operator<<(ostream &os, const MC &mc)
   os << "\"S^2_q1"            "\" -> "   << mc._sum_2_q1                <<   ",\n"
         "\"S^2_q2"            "\" -> "   << mc._sum_2_q2                <<   ",\n";
   os << "\"S^2 AF"            "\" -> "   << mc._sum_2AF                 <<   ",\n";
-  if ( 0 < mc._layer_dims && mc._layer_dims < mc.L_.size() )
+  if ( 0 < mc._layer_dims && mc._layer_dims < mc.L_.size() && measureSSQ )
   os << "\"SS^2"              "\" -> "   << mc._sumSS_2                 <<   ",\n"
         "\"SS^2_q1"           "\" -> "   << mc._sumSS_2_q1              <<   ",\n"
         "\"SS^2_q2"           "\" -> "   << mc._sumSS_2_q2              <<   ",\n"
