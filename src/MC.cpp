@@ -901,9 +901,8 @@ public:
           
           ++c;
           bool done = c>=nClusters;
-          if (!done)
-            FOR(d, _layer_dims)
-              done = done || p0[d] != _clusterLayers[c][d];
+          FOR(d, _layer_dims)
+            done = done || p0[d] != _clusterLayers[c][d];
           if (done)
             break;
         }
@@ -971,7 +970,11 @@ protected:
     if (!(0 < _layer_dims &&_layer_dims < dim))
       return;
     
+    uint Ni = 1;
+    for (uint d=_layer_dims; d<dim; ++d)
+      Ni *= L[d];
     LongFloat sumSS[dim]{}, sumSS_q1[dim][dim][2]{}, sumSS_q2[dim][dim][2]{};
+    LongFloat  sumSS_2=0, sumSS_2_q1=0,  sumSS_2_q2=0;
     FOR(i, N) {
       const Pos p = pos(i);
       const Spin s = _spins[i];
@@ -983,7 +986,7 @@ protected:
         const Spin s2 = _spins[index(p2)];
         
         const Float ss = s|s2;
-        sumSS[d0] += ss; // TODO should actually be split by layer when d0 < _layer_dims
+        sumSS[d0] += ss;
         
         FOR(d, dim)
         if ( (d0 < _layer_dims && _use_q_dim[d]) || (d0 >= _layer_dims && d < _layer_dims && L[d] == L[0]) ) {
@@ -997,35 +1000,37 @@ protected:
           sumSS_q2[d0][d][1] += sin_[x2] * ss;
         }
       }
-    }
-    
-    LongFloat nSS=0, nSSb=0;
-    LongFloat  sumSS_2=0, sumSS_2b=0;
-    LongFloat  sumSS_2_q1=0,  sumSS_2_q2=0,  nSS_q_dim=0;
-    LongFloat sumSS_2b_q1=0, sumSS_2b_q2=0, nSSb_q_dim=0;
-    FOR(d0, _layer_dims)
-    if (L[d0] == L[0])
-    {
-      ++nSS;
-      sumSS_2 += sq(sumSS[d0]);
-      for (uint d=_layer_dims; d<dim; ++d)
-      if (_use_q_dim[d])
-      {
-        ++nSS_q_dim;
+      
+      if ( (i+1)%Ni == 0 )
+      FOR(d0, _layer_dims)
+      if (L[d0] == L[0]) {
+        sumSS_2 += sq(sumSS[d0]);
+                      sumSS[d0] = 0;
+        for (uint d=_layer_dims; d<dim; ++d)
+        if (_use_q_dim[d])
         FOR(cs, 2) {
           sumSS_2_q1 += sq(sumSS_q1[d0][d][cs]);
+                           sumSS_q1[d0][d][cs] = 0;
           sumSS_2_q2 += sq(sumSS_q2[d0][d][cs]);
+                           sumSS_q2[d0][d][cs] = 0;
         }
       }
     }
+    
+    LongFloat nSS=0, nSS_q_dim=0, nSSb=0, nSSb_q_dim=0;
+    LongFloat sumSS_2b=0, sumSS_2b_q1=0, sumSS_2b_q2=0;
+    FOR(d0, _layer_dims)
+    if (L[d0] == L[0]) {
+      ++nSS;
+      for (uint d=_layer_dims; d<dim; ++d)
+        ++nSS_q_dim;
+    }
     for (uint d0=_layer_dims; d0<dim; ++d0)
-    if (_use_q_dim[d0])
-    {
+    if (_use_q_dim[d0]) {
       ++nSSb;
       sumSS_2b += sq(sumSS[d0]);
       FOR(d, _layer_dims)
-      if (L[d] == L[0])
-      {
+      if (L[d] == L[0]) {
         ++nSSb_q_dim;
         FOR(cs, 2) {
           sumSS_2b_q1 += sq(sumSS_q1[d0][d][cs]);
@@ -1033,14 +1038,11 @@ protected:
         }
       }
     }
-    LongFloat Ni = 1;
-    for (uint d=_layer_dims; d<dim; ++d)
-      Ni *= L[d];
-    const LongFloat N2 = sq(LongFloat(N));
-    sumSS_2     /= nSS *N*Ni;
-    sumSS_2b    /= nSSb*N2;
+    const LongFloat N2  = sq(LongFloat(N));
+    sumSS_2     /=  nSS      *N*Ni;
     sumSS_2_q1  /=  nSS_q_dim*N*Ni;
     sumSS_2_q2  /=  nSS_q_dim*N*Ni;
+    sumSS_2b    /= nSSb      *N2;
     sumSS_2b_q1 /= nSSb_q_dim*N2;
     sumSS_2b_q2 /= nSSb_q_dim*N2;
     
