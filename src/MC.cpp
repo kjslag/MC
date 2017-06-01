@@ -1033,9 +1033,9 @@ protected:
         }
       }
     }
-    const LongFloat N2 = sq(N);
-    sumSS_2     /= nSS *sq(N);
-    sumSS_2b    /= nSSb*sq(N);
+    const LongFloat N2 = sq(LongFloat(N));
+    sumSS_2     /= nSS *N2;
+    sumSS_2b    /= nSSb*N2;
     sumSS_2_q1  /=  nSS_q_dim*N2;
     sumSS_2_q2  /=  nSS_q_dim*N2;
     sumSS_2b_q1 /= nSSb_q_dim*N2;
