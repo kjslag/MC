@@ -307,6 +307,8 @@ public:
   friend ostream& operator<<(ostream &os, const MC &mc);
   friend ostream& operator<<(ostream &os, UpdateMethod method);
   
+  virtual string showSpins() const =0;
+  
 protected:
   MC(Size N_, const vector<uint> &L_v, uint n__)
     : N(N_),
@@ -964,6 +966,22 @@ public:
   
   virtual const SpinFunc* potential() const final { return _V; }
   
+  virtual string showSpins() const final
+  {
+    stringstream ret;
+    ret << "{";
+    FOR(i, N) {
+      if (n==1)
+        ret << _spins[i][0];
+      else
+        ret << _spins[i];
+      if ( i+1 < N )
+        ret << ", ";
+    }
+    ret << "}\n";
+    return ret.str();
+  }
+  
   Float V(Spin s) const { return (*_V)(s); }
   
 protected:
@@ -1298,6 +1316,8 @@ ostream& operator<<(ostream &os, const MC &mc)
         "\"SS^2b_q2"          "\" -> "   << mc._sumSS_2b_q2             <<   ",\n";
   os << "\"S^4"               "\" -> "   << mc._sum_4                   <<   ",\n"
         "\"S^6"               "\" -> "   << mc._sum_6                   <<   ",\n";
+  
+  //os << "\"spins\" -> " << mc.showSpins() << ",\n";
   
   if (potential) {
     const uint n = potential->measurements.size();
