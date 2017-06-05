@@ -326,10 +326,12 @@ protected:
      _n_sweeps(0),
      _sweep_num(0),
      _sum_1(0,1),
+     _sum_1l(0,1),
      _sum_2(0,1),
      _sum_2AF(0,1),
-     _sumSS_2(0,1),
-     _sumSS_2b(0,1)
+     _sumSS_1(0,1),
+     _sumSS_1l(0,1),
+     _sumSS_1b(0,1)
   { }
   
   virtual void set_potential_func(SpinFunc *V) =0;
@@ -347,8 +349,8 @@ protected:
   bool     _thermalizing;
   uint64_t _thermalization, _annealing, _n_sweeps, _sweep_num;
   
-  Value         _sum_1, _sum_2, _sum_2AF, _sum_2_q1, _sum_2_q2, _sum_4, _sum_6;
-  Value         _sumSS_2, _sumSS_2b, _sumSS_2_q1, _sumSS_2_q2, _sumSS_2b_q1, _sumSS_2b_q2;
+  Value         _sum_1, _sum_1l, _sum_2, _sum_2AF, _sum_2_q1, _sum_2_q2, _sum_4, _sum_6;
+  Value         _sumSS_1, _sumSS_1l, _sumSS_2, _sumSS_1b, _sumSS_2b, _sumSS_2_q1, _sumSS_2_q2, _sumSS_2b_q1l, _sumSS_2b_q2l, _sumSS_2b_q1i, _sumSS_2b_q2i;
   Value         _n_measurement_clusters, _n_potential_clusters;
   vector<Value> _n_clusters;
   Value         _t_local, _t_global, _t_measure;
@@ -655,8 +657,16 @@ public:
   
   bool AF_signQ(Pos p) const
   {
-    int tot = 0;
+    uint tot = 0;
     for (uint d=_layer_dims; d<dim; ++d)
+      tot += p[d];
+    return tot % 2;
+  }
+  
+  bool AF_layer_signQ(Pos p) const
+  {
+    uint tot = 0;
+    FOR(d, _layer_dims)
       tot += p[d];
     return tot % 2;
   }
@@ -869,6 +879,7 @@ public:
       typedef SpinMatrix_<n> SpinMatrix;
       static_assert( std::is_pod<SpinMatrix>::value, "SpinMatrix isn't POD" );
       
+      LongFloat sum_2l = 0;
       for (uint c=0; c<nClusters; )
       {
         LongFloat  S6=0, S4_1=0, S2AF=0;
@@ -932,6 +943,7 @@ public:
         
         LongFloat sum_4;
         _sum_1   .add       (sum_1);
+        sum_2l += sum_2;
         _sum_2   .add       (S2  /N2, sum_2);
         _sum_2AF .add       (S2AF/N2, sum_2AF);
         _sum_2_q1 <<         sum_2_q1 / (_n_q_dim*N2);
@@ -943,6 +955,11 @@ public:
         
         measureSS();
       }
+      
+      uint Nl = 1;
+      FOR(d, _layer_dims)
+        Nl *= L[d];
+      _sum_1l.add(sqrt(sum_2l/Nl));
       
       _n_measurement_clusters << nClusters;
     }
@@ -993,11 +1010,12 @@ protected:
     uint Ni = 1;
     for (uint d=_layer_dims; d<dim; ++d)
       Ni *= L[d];
-    LongFloat sumSS[dim]{}, sumSS_q1[dim][dim][2]{}, sumSS_q2[dim][dim][2]{};
-    LongFloat  sumSS_2=0, sumSS_2_q1=0,  sumSS_2_q2=0;
+    uint    n_sumSS_2l=0;
+    LongFloat sumSS_2l=0, sumSS[dim]{}, sumSS_q1[dim][dim][2]{}, sumSS_q2[dim][dim][2]{};
     FOR(i, N) {
       const Pos p = pos(i);
       const Spin s = _spins[i];
+      const Float sgn = AF_layer_signQ(p) ? 1 : -1;
       
       FOR(d0, dim)
       if ((d0 < _layer_dims && L[d0] == L[0]) || _use_q_dim[d0]) {
@@ -1005,11 +1023,11 @@ protected:
         p2[d0] = mod_d(p2[d0] + 1, d0);
         const Spin s2 = _spins[index(p2)];
         
-        const Float ss = s|s2;
+        const Float ss = sgn * (s|s2);
         sumSS[d0] += ss;
         
         FOR(d, dim)
-        if ( (d0 < _layer_dims && _use_q_dim[d]) || (d0 >= _layer_dims && d < _layer_dims && L[d] == L[0]) ) {
+        if ( (d0 < _layer_dims && _use_q_dim[d]) || (d0 >= _layer_dims && d != d0) ) {
           const uint x1 =    p[d];
           const uint x2 = (2*p[d])%L[d];
           const Float *cos_ = d < _layer_dims ? _cos0.get() : _cos.get(),
@@ -1024,54 +1042,67 @@ protected:
       if ( (i+1)%Ni == 0 )
       FOR(d0, _layer_dims)
       if (L[d0] == L[0]) {
-        sumSS_2 += sq(sumSS[d0]);
-                      sumSS[d0] = 0;
+        LongFloat sumSS_2_q1=0, sumSS_2_q2=0;
+        uint nSS_q_dim=0;
         for (uint d=_layer_dims; d<dim; ++d)
-        if (_use_q_dim[d])
-        FOR(cs, 2) {
-          sumSS_2_q1 += sq(sumSS_q1[d0][d][cs]);
-                           sumSS_q1[d0][d][cs] = 0;
-          sumSS_2_q2 += sq(sumSS_q2[d0][d][cs]);
-                           sumSS_q2[d0][d][cs] = 0;
+        if (_use_q_dim[d]) {
+          ++nSS_q_dim;
+          FOR(cs, 2) {
+            sumSS_2_q1 += sq(sumSS_q1[d0][d][cs]);
+                             sumSS_q1[d0][d][cs] = 0;
+            sumSS_2_q2 += sq(sumSS_q2[d0][d][cs]);
+                             sumSS_q2[d0][d][cs] = 0;
+          }
         }
+        const LongFloat Ni2 = sq(LongFloat(Ni)),
+                    sumSS_2 = sq(sumSS[d0]/Ni);
+                                 sumSS[d0] = 0;
+        
+        _sumSS_1   .add(sqrt(sumSS_2));
+        ++n_sumSS_2l;
+        sumSS_2l += sumSS_2;
+        _sumSS_2    <<  sumSS_2;
+        _sumSS_2_q1 <<  sumSS_2_q1 / (nSS_q_dim*Ni2);
+        _sumSS_2_q2 <<  sumSS_2_q2 / (nSS_q_dim*Ni2);
       }
     }
     
-    LongFloat nSS=0, nSS_q_dim=0, nSSb=0, nSSb_q_dim=0;
-    LongFloat sumSS_2b=0, sumSS_2b_q1=0, sumSS_2b_q2=0;
-    FOR(d0, _layer_dims)
-    if (L[d0] == L[0]) {
-      ++nSS;
-      for (uint d=_layer_dims; d<dim; ++d)
-        ++nSS_q_dim;
-    }
+    _sumSS_1l.add(sqrt(sumSS_2l/n_sumSS_2l));
+    
     for (uint d0=_layer_dims; d0<dim; ++d0)
     if (_use_q_dim[d0]) {
-      ++nSSb;
-      sumSS_2b += sq(sumSS[d0]);
+      LongFloat sumSS_2b_q1l=0, sumSS_2b_q2l=0;
+      uint nSSb_ql_dim=0;
       FOR(d, _layer_dims)
       if (L[d] == L[0]) {
-        ++nSSb_q_dim;
+        ++nSSb_ql_dim;
         FOR(cs, 2) {
-          sumSS_2b_q1 += sq(sumSS_q1[d0][d][cs]);
-          sumSS_2b_q2 += sq(sumSS_q2[d0][d][cs]);
+          sumSS_2b_q1l += sq(sumSS_q1[d0][d][cs]);
+          sumSS_2b_q2l += sq(sumSS_q2[d0][d][cs]);
         }
       }
+      
+      LongFloat sumSS_2b_q1i=0, sumSS_2b_q2i=0;
+      uint nSSb_qi_dim=0;
+      for (uint d=_layer_dims; d<dim; ++d)
+      if (d != d0 && L[d] == L[_layer_dims]) {
+        ++nSSb_qi_dim;
+        FOR(cs, 2) {
+          sumSS_2b_q1i += sq(sumSS_q1[d0][d][cs]);
+          sumSS_2b_q2i += sq(sumSS_q2[d0][d][cs]);
+        }
+      }
+      
+      const LongFloat N2 = sq(LongFloat(N)),
+                sumSS_2b = sq(sumSS[d0]/N);
+      
+      _sumSS_1b.add(sqrt(sumSS_2b));
+      _sumSS_2b      <<  sumSS_2b;
+      _sumSS_2b_q1l  <<  sumSS_2b_q1l / (nSSb_ql_dim*N2);
+      _sumSS_2b_q2l  <<  sumSS_2b_q2l / (nSSb_ql_dim*N2);
+      _sumSS_2b_q1i  <<  sumSS_2b_q1i / (nSSb_qi_dim*N2);
+      _sumSS_2b_q2i  <<  sumSS_2b_q2i / (nSSb_qi_dim*N2);
     }
-    const LongFloat N2  = sq(LongFloat(N));
-    sumSS_2     /=  nSS      *N*Ni;
-    sumSS_2_q1  /=  nSS_q_dim*N*Ni;
-    sumSS_2_q2  /=  nSS_q_dim*N*Ni;
-    sumSS_2b    /= nSSb      *N2;
-    sumSS_2b_q1 /= nSSb_q_dim*N2;
-    sumSS_2b_q2 /= nSSb_q_dim*N2;
-    
-    _sumSS_2    .add(sumSS_2);
-    _sumSS_2b   .add(sumSS_2b);
-    _sumSS_2_q1  <<  sumSS_2_q1;
-    _sumSS_2_q2  <<  sumSS_2_q2;
-    _sumSS_2b_q1 <<  sumSS_2b_q1;
-    _sumSS_2b_q2 <<  sumSS_2b_q2;
   }
   
   virtual void measure() final
@@ -1274,6 +1305,7 @@ private:
 };
 
 bool __brief_values = false;
+bool __print_spins  = false;
 ostream& operator<<(ostream &os, const MC &mc)
 {
   const SpinFunc *const potential = mc.potential();
@@ -1302,22 +1334,30 @@ ostream& operator<<(ostream &os, const MC &mc)
         "\"thermalization"    "\" -> "   << mc._thermalization          <<   ",\n"
         "\"annealing"         "\" -> "   << mc._annealing               <<   ",\n"
         "\"|S|"               "\" -> "   << mc._sum_1                   <<   ",\n"
+        "\"|S|l"              "\" -> "   << mc._sum_1l                  <<   ",\n"
         "\"S^2"               "\" -> "   << mc._sum_2                   <<   ",\n";
   if ( mc._layer_dims < mc.L_.size() )
   os << "\"S^2_q1"            "\" -> "   << mc._sum_2_q1                <<   ",\n"
         "\"S^2_q2"            "\" -> "   << mc._sum_2_q2                <<   ",\n";
   os << "\"S^2 AF"            "\" -> "   << mc._sum_2AF                 <<   ",\n";
-  if ( 0 < mc._layer_dims && mc._layer_dims < mc.L_.size() && measureSSQ )
-  os << "\"SS^2"              "\" -> "   << mc._sumSS_2                 <<   ",\n"
-        "\"SS^2_q1"           "\" -> "   << mc._sumSS_2_q1              <<   ",\n"
+  if ( 0 < mc._layer_dims && mc._layer_dims < mc.L_.size() && measureSSQ ) {
+  os << "\"|SS|"              "\" -> "   << mc._sumSS_1                 <<   ",\n"
+        "\"|SS|l"             "\" -> "   << mc._sumSS_1l                <<   ",\n"  // rms over layers
+        "\"SS^2"              "\" -> "   << mc._sumSS_2                 <<   ",\n"  // (sum_i s_li * s_l'i)^2
+        "\"SS^2_q1"           "\" -> "   << mc._sumSS_2_q1              <<   ",\n"  // vs i
         "\"SS^2_q2"           "\" -> "   << mc._sumSS_2_q2              <<   ",\n"
-        "\"SS^2b"             "\" -> "   << mc._sumSS_2b                <<   ",\n"
-        "\"SS^2b_q1"          "\" -> "   << mc._sumSS_2b_q1             <<   ",\n"
-        "\"SS^2b_q2"          "\" -> "   << mc._sumSS_2b_q2             <<   ",\n";
+        "\"|SSb|"             "\" -> "   << mc._sumSS_1b                <<   ",\n"
+        "\"SS^2b"             "\" -> "   << mc._sumSS_2b                <<   ",\n"  // (sum_li (-)^l s_li * s_li')^2 // intermediate order param
+        "\"SS^2b_q1l"         "\" -> "   << mc._sumSS_2b_q1l            <<   ",\n"  // vs l
+        "\"SS^2b_q2l"         "\" -> "   << mc._sumSS_2b_q2l            <<   ",\n";
+  if ( mc.L_.size() - mc._layer_dims >= 2 )
+  os << "\"SS^2b_q1i"         "\" -> "   << mc._sumSS_2b_q1i            <<   ",\n"  // vs i''
+        "\"SS^2b_q2i"         "\" -> "   << mc._sumSS_2b_q2i            <<   ",\n"; }
   os << "\"S^4"               "\" -> "   << mc._sum_4                   <<   ",\n"
         "\"S^6"               "\" -> "   << mc._sum_6                   <<   ",\n";
   
-  //os << "\"spins\" -> " << mc.showSpins() << ",\n";
+  if (__print_spins)
+    os << "\"spins\" -> " << mc.showSpins() << ",\n";
   
   if (potential) {
     const uint n = potential->measurements.size();
@@ -1401,7 +1441,8 @@ int main(const int argc, char *argv[])
   generic_options.add_options()
       ("help,h",       "print help message")
       ("verbose",      "print verbose output")
-      ("brief-values", "don't output detailed measurement errors");
+      ("brief-values", "don't output detailed measurement errors")
+      ("print-spins",  "output final spin configuration");
   
   vector<uint> L;
   uint n;
@@ -1443,6 +1484,7 @@ int main(const int argc, char *argv[])
   
   __verbose      = vm.count("verbose");
   __brief_values = vm.count("brief-values");
+  __print_spins   = vm.count("print-spins");
   
   /// generic options
   if ( vm.count("help") ) {
