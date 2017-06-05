@@ -952,8 +952,6 @@ public:
         _sum_6    <<        (Pow<3>(S2) - 6*S2*S4 + 16*S6 + 6*S2*S_2_2 - 24*S_4_2 + 8*S_2_2_2)/N6;
         if (_V)
           _V->measure({S1, sum_4, _spins.get(), N});
-        
-        measureSS();
       }
       
       uint Nl = 1;
@@ -962,6 +960,8 @@ public:
       _sum_1l.add(sqrt(sum_2l/Nl));
       
       _n_measurement_clusters << nClusters;
+      
+      measureSS();
     }
     else if ( !_thermalizing ) {
       if ( force_wolff )

@@ -14,7 +14,7 @@ LDFLAGS		= -lm -lboost_program_options
 
 all: MC
 
-MC: src/MC.cpp src/util.hh
+MC: src/MC.cpp src/util.hh Makefile
 	$(CXX) $< -o $@ $(CXXFLAGS) $(LDFLAGS) -DDEBUG
 
 # valgrind --tool=callgrind  ./MC
