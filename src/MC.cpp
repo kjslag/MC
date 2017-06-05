@@ -308,6 +308,7 @@ public:
   friend ostream& operator<<(ostream &os, UpdateMethod method);
   
   virtual string showSpins() const =0;
+  virtual string layerMeans() const =0;
   
 protected:
   MC(Size N_, const vector<uint> &L_v, uint n__)
@@ -999,6 +1000,34 @@ public:
     return ret.str();
   }
   
+  virtual string layerMeans() const final
+  {
+    uint Ni = 1;
+    for (uint d=_layer_dims; d<dim; ++d)
+      Ni *= L[d];
+    
+    stringstream ret;
+    ret << "{";
+    SpinSum sum{};
+    FOR(i, N) {
+      sum += _spins[i];
+      
+      if ( (i+1)%Ni == 0 ) {
+        sum /= Ni;
+        if (n==1)
+          ret << sum[0];
+        else
+          ret << sum;
+        sum = SpinSum();
+        
+        if ( i+1 < N )
+          ret << ", ";
+      }
+    }
+    ret << "}\n";
+    return ret.str();
+  }
+  
   Float V(Spin s) const { return (*_V)(s); }
   
 protected:
@@ -1358,6 +1387,9 @@ ostream& operator<<(ostream &os, const MC &mc)
   
   if (__print_spins)
     os << "\"spins\" -> " << mc.showSpins() << ",\n";
+  
+  if (0 < mc._layer_dims)
+    os << "\"layer means\" -> " << mc.layerMeans() << ",\n";
   
   if (potential) {
     const uint n = potential->measurements.size();
