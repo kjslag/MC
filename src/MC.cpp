@@ -340,7 +340,8 @@ protected:
      _sum_2AF(0,1),
      _sumSS_1(0,1),
      _sumSS_1l(0,1),
-     _sumSS_1b(0,1)
+     _sumSS_1b(0,1),
+     _sumSS_1c(0,1)
   { }
   
   virtual void set_potential_func(SpinFunc *V) =0;
@@ -359,7 +360,7 @@ protected:
   uint64_t _thermalization, _annealing, _n_sweeps, _sweep_num;
   
   Value         _sum_1, _sum_1l, _sum_2, _sum_2AF, _sum_2_q1, _sum_2_q2, _sum_4, _sum_6;
-  Value         _sumSS_1, _sumSS_1l, _sumSS_2, _sumSS_1b, _sumSS_2b, _sumSS_2_q1, _sumSS_2_q2, _sumSS_2b_q1l, _sumSS_2b_q2l, _sumSS_2b_q1i, _sumSS_2b_q2i;
+  Value         _sumSS_1, _sumSS_1l, _sumSS_2, _sumSS_1b, _sumSS_2b, _sumSS_1c, _sumSS_2c, _sumSS_2_q1, _sumSS_2_q2, _sumSS_2b_q1l, _sumSS_2b_q2l, _sumSS_2b_q1i, _sumSS_2b_q2i, _sumSS_2c_q1l, _sumSS_2c_q2l, _sumSS_2c_q1i, _sumSS_2c_q2i;
   Value         _n_measurement_clusters, _n_potential_clusters;
   vector<Value> _n_clusters;
   Value         _t_local, _t_global, _t_measure;
@@ -1048,7 +1049,7 @@ protected:
     for (uint d=_layer_dims; d<dim; ++d)
       Ni *= L[d];
     uint    n_sumSS_2l=0;
-    LongFloat sumSS_2l=0, sumSS[dim]{}, sumSS_q1[dim][dim][2]{}, sumSS_q2[dim][dim][2]{};
+    LongFloat sumSS_2l=0, sumSSb[dim]{}, sumSS[dim]{}, sumSSb_q1[dim][dim][2]{}, sumSSb_q2[dim][dim][2]{}, sumSS_q1[dim][dim][2]{}, sumSS_q2[dim][dim][2]{};
     FOR(i, N) {
       const Pos p = pos(i);
       const Spin s = _spins[i];
@@ -1060,8 +1061,10 @@ protected:
         p2[d0] = mod_d(p2[d0] + 1, d0);
         const Spin s2 = _spins[index(p2)];
         
-        const Float ss = sgn * (s|s2);
-        sumSS[d0] += ss;
+        const Float ss  = s|s2;
+        const Float ssb = sgn * ss;
+        sumSSb[d0] += ssb;
+        sumSS [d0] += ss;
         
         FOR(d, dim)
         if ( (d0 < _layer_dims && _use_q_dim[d]) || (d0 >= _layer_dims && d != d0) ) {
@@ -1069,10 +1072,14 @@ protected:
           const uint x2 = (2*p[d])%L[d];
           const Float *cos_ = d < _layer_dims ? _cos0.get() : _cos.get(),
                       *sin_ = d < _layer_dims ? _sin0.get() : _sin.get();
-          sumSS_q1[d0][d][0] += cos_[x1] * ss;
-          sumSS_q1[d0][d][1] += sin_[x1] * ss;
-          sumSS_q2[d0][d][0] += cos_[x2] * ss;
-          sumSS_q2[d0][d][1] += sin_[x2] * ss;
+          sumSSb_q1[d0][d][0] += cos_[x1] * ssb;
+          sumSSb_q1[d0][d][1] += sin_[x1] * ssb;
+          sumSSb_q2[d0][d][0] += cos_[x2] * ssb;
+          sumSSb_q2[d0][d][1] += sin_[x2] * ssb;
+          sumSS_q1 [d0][d][0] += cos_[x1] * ss;
+          sumSS_q1 [d0][d][1] += sin_[x1] * ss;
+          sumSS_q2 [d0][d][0] += cos_[x2] * ss;
+          sumSS_q2 [d0][d][1] += sin_[x2] * ss;
         }
       }
       
@@ -1108,30 +1115,35 @@ protected:
     
     for (uint d0=_layer_dims; d0<dim; ++d0)
     if (_use_q_dim[d0]) {
-      LongFloat sumSS_2b_q1l=0, sumSS_2b_q2l=0;
+      LongFloat sumSS_2b_q1l=0, sumSS_2b_q2l=0, sumSS_2c_q1l=0, sumSS_2c_q2l=0;
       uint nSSb_ql_dim=0;
       FOR(d, _layer_dims)
       if (L[d] == L[0]) {
         ++nSSb_ql_dim;
         FOR(cs, 2) {
-          sumSS_2b_q1l += sq(sumSS_q1[d0][d][cs]);
-          sumSS_2b_q2l += sq(sumSS_q2[d0][d][cs]);
+          sumSS_2b_q1l += sq(sumSSb_q1[d0][d][cs]);
+          sumSS_2b_q2l += sq(sumSSb_q2[d0][d][cs]);
+          sumSS_2c_q1l += sq( sumSS_q1[d0][d][cs]);
+          sumSS_2c_q2l += sq( sumSS_q2[d0][d][cs]);
         }
       }
       
-      LongFloat sumSS_2b_q1i=0, sumSS_2b_q2i=0;
+      LongFloat sumSS_2b_q1i=0, sumSS_2b_q2i=0, sumSS_2c_q1i=0, sumSS_2c_q2i=0;
       uint nSSb_qi_dim=0;
       for (uint d=_layer_dims; d<dim; ++d)
       if (d != d0 && L[d] == L[_layer_dims]) {
         ++nSSb_qi_dim;
         FOR(cs, 2) {
-          sumSS_2b_q1i += sq(sumSS_q1[d0][d][cs]);
-          sumSS_2b_q2i += sq(sumSS_q2[d0][d][cs]);
+          sumSS_2b_q1i += sq(sumSSb_q1[d0][d][cs]);
+          sumSS_2b_q2i += sq(sumSSb_q2[d0][d][cs]);
+          sumSS_2c_q1i += sq( sumSS_q1[d0][d][cs]);
+          sumSS_2c_q2i += sq( sumSS_q2[d0][d][cs]);
         }
       }
       
       const LongFloat N2 = sq(LongFloat(N)),
-                sumSS_2b = sq(sumSS[d0]/N);
+                sumSS_2b = sq(sumSSb[d0]/N),
+                sumSS_2c = sq( sumSS[d0]/N);
       
       _sumSS_1b.add(sqrt(sumSS_2b));
       _sumSS_2b      <<  sumSS_2b;
@@ -1139,6 +1151,13 @@ protected:
       _sumSS_2b_q2l  <<  sumSS_2b_q2l / (nSSb_ql_dim*N2);
       _sumSS_2b_q1i  <<  sumSS_2b_q1i / (nSSb_qi_dim*N2);
       _sumSS_2b_q2i  <<  sumSS_2b_q2i / (nSSb_qi_dim*N2);
+      
+      _sumSS_1c.add(sqrt(sumSS_2c));
+      _sumSS_2c      <<  sumSS_2c;
+      _sumSS_2c_q1l  <<  sumSS_2c_q1l / (nSSb_ql_dim*N2);
+      _sumSS_2c_q2l  <<  sumSS_2c_q2l / (nSSb_ql_dim*N2);
+      _sumSS_2c_q1i  <<  sumSS_2c_q1i / (nSSb_qi_dim*N2);
+      _sumSS_2c_q2i  <<  sumSS_2c_q2i / (nSSb_qi_dim*N2);
     }
   }
   
@@ -1386,10 +1405,16 @@ ostream& operator<<(ostream &os, const MC &mc)
         "\"|SSb|"             "\" -> "   << mc._sumSS_1b                <<   ",\n"
         "\"SS^2b"             "\" -> "   << mc._sumSS_2b                <<   ",\n"  // (sum_li (-)^l s_li * s_li')^2 // intermediate order param
         "\"SS^2b_q1l"         "\" -> "   << mc._sumSS_2b_q1l            <<   ",\n"  // vs l
-        "\"SS^2b_q2l"         "\" -> "   << mc._sumSS_2b_q2l            <<   ",\n";
+        "\"SS^2b_q2l"         "\" -> "   << mc._sumSS_2b_q2l            <<   ",\n"
+        "\"|SSc|"             "\" -> "   << mc._sumSS_1c                <<   ",\n"
+        "\"SS^2c"             "\" -> "   << mc._sumSS_2c                <<   ",\n"  // (s_li * s_li')^2 // intermediate order param
+        "\"SS^2c_q1l"         "\" -> "   << mc._sumSS_2c_q1l            <<   ",\n"  // vs l
+        "\"SS^2c_q2l"         "\" -> "   << mc._sumSS_2c_q2l            <<   ",\n";
   if ( mc.L_.size() - mc._layer_dims >= 2 )
   os << "\"SS^2b_q1i"         "\" -> "   << mc._sumSS_2b_q1i            <<   ",\n"  // vs i''
-        "\"SS^2b_q2i"         "\" -> "   << mc._sumSS_2b_q2i            <<   ",\n"; }
+        "\"SS^2b_q2i"         "\" -> "   << mc._sumSS_2b_q2i            <<   ",\n"
+        "\"SS^2c_q1i"         "\" -> "   << mc._sumSS_2c_q1i            <<   ",\n"  // vs i''
+        "\"SS^2c_q2i"         "\" -> "   << mc._sumSS_2c_q2i            <<   ",\n"; }
   os << "\"S^4"               "\" -> "   << mc._sum_4                   <<   ",\n"
         "\"S^6"               "\" -> "   << mc._sum_6                   <<   ",\n";
   
