@@ -258,6 +258,8 @@ public:
       t << duration_cast<duration<LongFloat>>(steady_clock::now() - t0).count(); \
     }while(0)
     
+    int done = -8;
+    std::cerr << "progress (log2): " << std::flush;
     const uint64_t nSweeps = _n_sweeps + _thermalization;
     for ( ; _sweep_num<nSweeps; ++_sweep_num ) {
       _thermalizing = _sweep_num < _thermalization;
@@ -287,7 +289,13 @@ public:
       
       if ( (_sweep_num%16)==0 )
         normalize_spins(); // to prevent roundoff error
+      
+      if ( log(double(_sweep_num+1)/nSweeps)/log(2) > done ) {
+        std::cerr << done << " " << std::flush;
+        ++done;
+      }
     }
+    std::cerr << std::endl;
     #undef TIME
   }
   
@@ -1516,7 +1524,7 @@ int main(const int argc, char *argv[])
   
   __verbose      = vm.count("verbose");
   __brief_values = vm.count("brief-values");
-  __print_spins   = vm.count("print-spins");
+  __print_spins  = vm.count("print-spins");
   
   /// generic options
   if ( vm.count("help") ) {
