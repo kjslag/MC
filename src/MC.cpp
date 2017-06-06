@@ -258,9 +258,9 @@ public:
       t << duration_cast<duration<LongFloat>>(steady_clock::now() - t0).count(); \
     }while(0)
     
-    int done = -8;
     std::cerr << "progress (log2): " << std::flush;
     const uint64_t nSweeps = _n_sweeps + _thermalization;
+    int done = ceil(-log(nSweeps)/log(2));
     for ( ; _sweep_num<nSweeps; ++_sweep_num ) {
       _thermalizing = _sweep_num < _thermalization;
       switch (_update_method) {
