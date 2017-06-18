@@ -39,7 +39,7 @@ struct Value
   // min and max histo values
   // the add() function must be used instead of operator<<
   // be careful not to add improved (reduced variance) estimators to the histo
-  Value(LongFloat min, LongFloat max, size_t bins=1u<<7)
+  Value(LongFloat min, LongFloat max, size_t bins=1u<<8)
    : _n_samples(0), _means_k(0),
      _histo(bins),
      _histo_min(min), _histo_max(max),
