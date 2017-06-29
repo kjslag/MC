@@ -1623,13 +1623,11 @@ int main(const int argc, char *argv[])
   else
     Assert(J.size() == 1);
   
-  Assert(n);
-  unique_ptr<MC> mc = MC::make(L, n);
-  
-  #ifndef USE_RdRand
   random_seed = std::chrono::system_clock::now().time_since_epoch().count() * getpid();
   random_engine.seed(random_seed);
-  #endif
+  
+  Assert(n);
+  unique_ptr<MC> mc = MC::make(L, n);
   
   Assert(J.size());
   mc->set_layer_dims(n_layer_dims);
