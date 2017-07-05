@@ -1,4 +1,4 @@
-// developer: Kevin Slagle (kslagle@physics.ucsb.edu)
+// developer: Kevin Slagle (kjslag@gmail.com)
 // date: 2013
 
 typedef unsigned uint;
